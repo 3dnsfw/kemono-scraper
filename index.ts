@@ -255,18 +255,7 @@ try {
 
   console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
 
-  // aggregate files
-  const files: File[] = posts.reduce((allFiles, post) => {
-    const postFiles = post.attachments.slice();
-    // add post.file if it's set and not already in there
-    if (post?.file?.path && !postFiles.some(att => att.path === post.file.path)) {
-      postFiles.push(post.file);
-    }
-    return [...allFiles, ...postFiles];
-  }, [] as File[]);
-
   const downloadQueue: DownloadQueueEntry[] = [];
-
   for (const post of posts) {
     const postFiles: File[] = post.attachments.slice();
     if (post.file?.path && !postFiles.some(att => att.path === post.file.path)) {
