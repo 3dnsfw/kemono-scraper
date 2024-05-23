@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@tanuel/async-queue':
+        specifier: ^1.0.1
+        version: 1.0.1
       axios:
         specifier: ^1.7.2
         version: 1.7.2
@@ -182,6 +185,9 @@ packages:
     engines: {node: '>=12'}
     cpu: [x64]
     os: [win32]
+
+  '@tanuel/async-queue@1.0.1':
+    resolution: {integrity: sha512-/bkFtv+EVBZnmdqiLadkGMuOz8Z+QFFYBQlUW8f5+NdH+Ul+NucS4NWWdEb+dWPauE10QXyP31jkF0t/Y+y4vA==}
 
   '@types/cli-progress@3.11.5':
     resolution: {integrity: sha512-D4PbNRbviKyppS5ivBGyFO29POlySLmA2HyUFE4p5QGazAMM3CwkKWcvTl8gvElSuxRh6FPKL8XmidX873ou4g==}
@@ -440,6 +446,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.20.2':
     optional: true
+
+  '@tanuel/async-queue@1.0.1': {}
 
   '@types/cli-progress@3.11.5':
     dependencies:

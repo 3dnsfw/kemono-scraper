@@ -11,6 +11,7 @@
   "private": true,
   "license": "MIT",
   "dependencies": {
+    "@tanuel/async-queue": "^1.0.1",
     "axios": "^1.7.2",
     "chalk": "^5.3.0",
     "fs-extra": "^11.2.0",

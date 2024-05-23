@@ -5,6 +5,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
+import { AsyncQueue } from "@tanuel/async-queue";
 
 interface File {
   name: string;
@@ -118,6 +119,11 @@ async function fetchPosts(offset: number = 0): Promise<Post[]> {
 
 async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0): Promise<void> {
   const { url, outputPath, postId } = downloadQueueEntry;
+  downloadBars.addTask(postId, {
+    type: 'percentage',
+    message: 'Starting...',
+    barTransformFn: chalk.blue,
+  });
   try {
     if (await fs.pathExists(outputPath)) {
       downloadBars.done(postId, {
@@ -186,45 +192,31 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0)
 }
 
 async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
-  let completedDownloads = 0;
-  const totalFiles = downloadQueue.length;
-  const activeDownloads: Promise<void>[] = [];
-
-  for (const downloadTask of downloadQueue) {
-    downloadBars.addTask(downloadTask.postId, {
-      type: 'percentage',
-      message: 'Starting...',
-      barTransformFn: chalk.blue,
-    });
-
-    if (activeDownloads.length >= MAX_CONCURRENT_DOWNLOADS) {
-      await Promise.race(activeDownloads);
-    }
-
-    const downloadPromise = downloadFile(downloadTask)
-      .then(() => {
-        const index = activeDownloads.indexOf(downloadPromise);
-        if (index !== -1) {
-          activeDownloads.splice(index, 1);
-        }
+  const queue = new AsyncQueue({ limit: MAX_CONCURRENT_DOWNLOADS });
+  return new Promise<void>((resolve, reject) => {
+    let completedDownloads = 0;
+    const totalFiles = downloadQueue.length;
+  
+    for (const downloadTask of downloadQueue) {
+      queue.push(async () => downloadFile(downloadTask).then(() => {
         completedDownloads++;
         downloadBars.updateTask(overallProgressBarId, {
           percentage: completedDownloads / totalFiles,
           message: `${completedDownloads}/${totalFiles} Files`,
         });
-      })
-      .catch(error => {
+      }).catch(error => {
         console.error(`Failed to download ${downloadTask.url}:`, error);
         downloadBars.updateTask(downloadTask.postId, {
           message: `Error: ${error}`,
           barTransformFn: chalk.red,
         });
-      });
-
-    activeDownloads.push(downloadPromise);
-  }
-
-  await Promise.all(activeDownloads);
+      }));
+    }
+  
+    queue.on('done', () => {
+      resolve();
+    }).on('reject', e => reject(e));
+  });
 }
 
 function sanitizeFileName(fileName: string): string {
