@@ -109,10 +109,6 @@ const downloadBars = new MultiProgressBars({
 });
 
 const overallProgressBarId = 'Overall Progress';
-downloadBars.addTask(overallProgressBarId, {
-  type: 'percentage',
-  barTransformFn: chalk.yellow,
-});
 
 async function fetchPosts(offset: number = 0): Promise<Post[]> {
   const url = `${API_URL}?o=${offset}`;
@@ -273,7 +269,9 @@ try {
     }
   }
 
-  downloadBars.updateTask(overallProgressBarId, {
+  downloadBars.addTask(overallProgressBarId, {
+    type: 'percentage',
+    barTransformFn: chalk.yellow,
     message: 'Starting downloads...',
   });
   await downloadFiles(downloadQueue);
