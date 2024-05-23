@@ -170,9 +170,12 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0)
     });
   } catch (error) {
     if (isAxiosError(error)) {
-      downloadBars.restartTask(postId, {
+      downloadBars.updateTask(postId, {
         message: `Error: ${error.response?.status} - ${error.response?.statusText}. Retrying...`,
         barTransformFn: chalk.red,
+      });
+      downloadBars.restartTask(postId, {
+        barTransformFn: chalk.blue,
       });
       if (retries < MAX_DOWNLOAD_RETRIES) {
         // Wait before retrying
