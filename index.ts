@@ -99,9 +99,9 @@ const DOWNLOAD_URL = `https://${cdnHost}/data`;
 // Replace %username% in the output directory with the actual user ID
 const OUTPUT_DIR = outputDir.replace('%username%', userId);
 const PAGE_SIZE = 50;
-const MAX_CONCURRENT_DOWNLOADS = 5;
+const MAX_CONCURRENT_DOWNLOADS = 2;
 const MAX_DOWNLOAD_RETRIES = 3;
-const DOWNLOAD_RETRY_WAIT_SECONDS = 5000;
+const DOWNLOAD_RETRY_WAIT_SECONDS = 10000;
 
 const downloadBars = new MultiProgressBars({
   initMessage: 'Downloads',
