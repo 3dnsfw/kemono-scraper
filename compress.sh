@@ -36,12 +36,23 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Statistics
-declare -i converted_images=0
-declare -i skipped_images=0
-declare -i converted_videos=0
-declare -i skipped_videos=0
-declare -i errors=0
+# Statistics (temp files for parallel tracking)
+STATS_DIR=$(mktemp -d)
+trap "rm -rf $STATS_DIR" EXIT
+echo 0 > "$STATS_DIR/converted_images"
+echo 0 > "$STATS_DIR/skipped_images"
+echo 0 > "$STATS_DIR/converted_videos"
+echo 0 > "$STATS_DIR/skipped_videos"
+echo 0 > "$STATS_DIR/errors"
+
+increment_stat() {
+    local file="$STATS_DIR/$1"
+    flock "$file" bash -c "echo \$((\$(cat '$file') + 1)) > '$file'"
+}
+
+get_stat() {
+    cat "$STATS_DIR/$1"
+}
 
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -73,22 +84,25 @@ convert_image() {
     
     if [[ -f "$dst" ]]; then
         log_warn "JXL already exists: $dst"
-        ((skipped_images++))
+        increment_stat skipped_images
         return 0
     fi
     
     log_info "Converting image: $src"
-    if cjxl "$src" "$dst" -q "$JPEG_XL_QUALITY" -e "$JPEG_XL_EFFORT" 2>/dev/null; then
+    # -j 0 disables lossless JPEG transcoding to allow quality setting
+    if cjxl "$src" "$dst" -j 0 -q "$JPEG_XL_QUALITY" -e "$JPEG_XL_EFFORT" 2>/dev/null; then
         local src_size=$(stat -c%s "$src")
         local dst_size=$(stat -c%s "$dst")
         local savings=$((100 - (dst_size * 100 / src_size)))
+        # Preserve original modification time
+        touch -r "$src" "$dst"
         log_success "Converted: $src -> $dst (${savings}% smaller)"
         rm "$src"
-        ((converted_images++))
+        increment_stat converted_images
     else
         log_error "Failed to convert: $src"
         rm -f "$dst"
-        ((errors++))
+        increment_stat errors
     fi
 }
 
@@ -101,14 +115,14 @@ convert_video() {
     # Check if already converted version exists
     if [[ -f "$dst" ]]; then
         log_warn "AV1 version already exists: $dst"
-        ((skipped_videos++))
+        increment_stat skipped_videos
         return 0
     fi
     
     # Check if source is already AV1
     if is_av1 "$src"; then
         log_warn "Already AV1: $src"
-        ((skipped_videos++))
+        increment_stat skipped_videos
         return 0
     fi
     
@@ -127,25 +141,26 @@ convert_video() {
         
         # Only keep the new file if it's smaller or similar size
         if [[ $dst_size -lt $((src_size * 110 / 100)) ]]; then
+            # Preserve original modification time
+            touch -r "$src" "$tmp"
             mv "$tmp" "$dst"
             rm "$src"
             log_success "Converted: $src -> $dst (${savings}% smaller)"
-            ((converted_videos++))
+            increment_stat converted_videos
         else
             rm "$tmp"
             log_warn "AV1 version larger, keeping original: $src"
-            ((skipped_videos++))
+            increment_stat skipped_videos
         fi
     else
         log_error "Failed to convert: $src"
         rm -f "$tmp"
-        ((errors++))
+        increment_stat errors
     fi
 }
 
-export -f convert_image convert_video is_av1 log_info log_success log_warn log_error
-export JPEG_XL_QUALITY JPEG_XL_EFFORT AV1_CRF AV1_PRESET
-export converted_images skipped_images converted_videos skipped_videos errors
+export -f convert_image convert_video is_av1 log_info log_success log_warn log_error increment_stat get_stat
+export JPEG_XL_QUALITY JPEG_XL_EFFORT AV1_CRF AV1_PRESET STATS_DIR
 export RED GREEN YELLOW BLUE NC
 
 # Find all downloads-* directories
@@ -172,9 +187,7 @@ IMAGE_COUNT=$(echo "$IMAGE_FILES" | grep -c . || echo 0)
 
 if [[ $IMAGE_COUNT -gt 0 ]]; then
     log_info "Found $IMAGE_COUNT JPEG images to process"
-    echo "$IMAGE_FILES" | while read -r file; do
-        [[ -n "$file" ]] && convert_image "$file"
-    done
+    echo "$IMAGE_FILES" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'convert_image "$@"' _ {}
 else
     log_info "No JPEG images found"
 fi
@@ -188,9 +201,7 @@ VIDEO_COUNT=$(echo "$VIDEO_FILES" | grep -c . || echo 0)
 
 if [[ $VIDEO_COUNT -gt 0 ]]; then
     log_info "Found $VIDEO_COUNT MP4 videos to check"
-    echo "$VIDEO_FILES" | while read -r file; do
-        [[ -n "$file" ]] && convert_video "$file"
-    done
+    echo "$VIDEO_FILES" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'convert_video "$@"' _ {}
 else
     log_info "No MP4 videos found"
 fi
@@ -199,9 +210,9 @@ echo ""
 echo "============================================"
 echo "  Compression Complete"
 echo "============================================"
-echo "Images converted: $converted_images"
-echo "Images skipped: $skipped_images"
-echo "Videos converted: $converted_videos"
-echo "Videos skipped: $skipped_videos"
-echo "Errors: $errors"
+echo "Images converted: $(get_stat converted_images)"
+echo "Images skipped: $(get_stat skipped_images)"
+echo "Videos converted: $(get_stat converted_videos)"
+echo "Videos skipped: $(get_stat skipped_videos)"
+echo "Errors: $(get_stat errors)"
 echo "============================================"

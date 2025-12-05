@@ -6,7 +6,8 @@ param(
     [int]$JpegXlQuality = 90,
     [int]$JpegXlEffort = 7,
     [int]$Av1Crf = 30,
-    [int]$Av1Preset = 6
+    [int]$Av1Preset = 6,
+    [int]$ParallelJobs = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,123 +32,21 @@ if (-not (Test-Command "ffprobe")) {
     exit 1
 }
 
-# Statistics
-$script:convertedImages = 0
-$script:skippedImages = 0
-$script:convertedVideos = 0
-$script:skippedVideos = 0
-$script:errors = 0
+# Statistics (thread-safe for parallel execution)
+$script:stats = [hashtable]::Synchronized(@{
+    convertedImages = 0
+    skippedImages = 0
+    convertedVideos = 0
+    skippedVideos = 0
+    errors = 0
+})
 
 function Write-Info($Message) {
     Write-Host "[INFO] $Message" -ForegroundColor Blue
 }
 
-function Write-Success($Message) {
-    Write-Host "[OK] $Message" -ForegroundColor Green
-}
-
 function Write-Skip($Message) {
     Write-Host "[SKIP] $Message" -ForegroundColor Yellow
-}
-
-function Write-Err($Message) {
-    Write-Host "[ERROR] $Message" -ForegroundColor Red
-}
-
-function Test-IsAv1($FilePath) {
-    try {
-        $codec = & ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 $FilePath 2>$null
-        return $codec -eq "av1"
-    } catch {
-        return $false
-    }
-}
-
-function Convert-Image($SourcePath) {
-    $basePath = [System.IO.Path]::ChangeExtension($SourcePath, $null).TrimEnd('.')
-    $destPath = "$basePath.jxl"
-    
-    if (Test-Path $destPath) {
-        Write-Skip "JXL already exists: $destPath"
-        $script:skippedImages++
-        return
-    }
-    
-    Write-Info "Converting image: $SourcePath"
-    
-    try {
-        & cjxl $SourcePath $destPath -q $JpegXlQuality -e $JpegXlEffort 2>$null
-        
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $destPath)) {
-            $srcSize = (Get-Item $SourcePath).Length
-            $dstSize = (Get-Item $destPath).Length
-            $savings = [math]::Round(100 - ($dstSize * 100 / $srcSize))
-            
-            Remove-Item $SourcePath -Force
-            Write-Success "Converted: $SourcePath -> $destPath (${savings}% smaller)"
-            $script:convertedImages++
-        } else {
-            throw "cjxl failed"
-        }
-    } catch {
-        Write-Err "Failed to convert: $SourcePath"
-        if (Test-Path $destPath) { Remove-Item $destPath -Force }
-        $script:errors++
-    }
-}
-
-function Convert-Video($SourcePath) {
-    $basePath = [System.IO.Path]::ChangeExtension($SourcePath, $null).TrimEnd('.')
-    $destPath = "${basePath}_av1.mp4"
-    $tempPath = "${basePath}_av1_tmp.mp4"
-    
-    # Check if already converted version exists
-    if (Test-Path $destPath) {
-        Write-Skip "AV1 version already exists: $destPath"
-        $script:skippedVideos++
-        return
-    }
-    
-    # Check if source is already AV1
-    if (Test-IsAv1 $SourcePath) {
-        Write-Skip "Already AV1: $SourcePath"
-        $script:skippedVideos++
-        return
-    }
-    
-    Write-Info "Re-encoding video: $SourcePath"
-    
-    try {
-        & ffmpeg -y -i $SourcePath `
-            -c:v libsvtav1 -crf $Av1Crf -preset $Av1Preset `
-            -c:a copy `
-            -movflags +faststart `
-            $tempPath 2>$null
-        
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $tempPath)) {
-            $srcSize = (Get-Item $SourcePath).Length
-            $dstSize = (Get-Item $tempPath).Length
-            $savings = [math]::Round(100 - ($dstSize * 100 / $srcSize))
-            
-            # Only keep the new file if it's smaller or similar size
-            if ($dstSize -lt ($srcSize * 1.1)) {
-                Move-Item $tempPath $destPath -Force
-                Remove-Item $SourcePath -Force
-                Write-Success "Converted: $SourcePath -> $destPath (${savings}% smaller)"
-                $script:convertedVideos++
-            } else {
-                Remove-Item $tempPath -Force
-                Write-Skip "AV1 version larger, keeping original: $SourcePath"
-                $script:skippedVideos++
-            }
-        } else {
-            throw "ffmpeg failed"
-        }
-    } catch {
-        Write-Err "Failed to convert: $SourcePath"
-        if (Test-Path $tempPath) { Remove-Item $tempPath -Force }
-        $script:errors++
-    }
 }
 
 # Find all downloads-* directories
@@ -163,6 +62,7 @@ Write-Host "  Media Compression Script"
 Write-Host "============================================"
 Write-Host "JPEG XL Quality: $JpegXlQuality, Effort: $JpegXlEffort"
 Write-Host "AV1 CRF: $Av1Crf, Preset: $Av1Preset"
+Write-Host "Parallel jobs: $ParallelJobs"
 Write-Host "============================================"
 Write-Host ""
 
@@ -174,8 +74,47 @@ $imageFiles = $downloadDirs | ForEach-Object {
 
 if ($imageFiles) {
     Write-Info "Found $($imageFiles.Count) JPEG images to process"
-    foreach ($file in $imageFiles) {
-        Convert-Image $file.FullName
+    $imageFiles | ForEach-Object -ThrottleLimit $ParallelJobs -Parallel {
+        $SourcePath = $_.FullName
+        $Quality = $using:JpegXlQuality
+        $Effort = $using:JpegXlEffort
+        $Stats = $using:stats
+        
+        $basePath = [System.IO.Path]::ChangeExtension($SourcePath, $null).TrimEnd('.')
+        $destPath = "$basePath.jxl"
+        
+        if (Test-Path $destPath) {
+            Write-Host "[SKIP] JXL already exists: $destPath" -ForegroundColor Yellow
+            $Stats.skippedImages++
+            return
+        }
+        
+        Write-Host "[INFO] Converting image: $SourcePath" -ForegroundColor Blue
+        
+        try {
+            # -j 0 disables lossless JPEG transcoding to allow quality setting
+            & cjxl $SourcePath $destPath -j 0 -q $Quality -e $Effort 2>$null
+            
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $destPath)) {
+                $srcItem = Get-Item $SourcePath
+                $srcSize = $srcItem.Length
+                $dstSize = (Get-Item $destPath).Length
+                $savings = [math]::Round(100 - ($dstSize * 100 / $srcSize))
+                
+                # Preserve original modification time
+                (Get-Item $destPath).LastWriteTime = $srcItem.LastWriteTime
+                
+                Remove-Item $SourcePath -Force
+                Write-Host "[OK] Converted: $SourcePath -> $destPath (${savings}% smaller)" -ForegroundColor Green
+                $Stats.convertedImages++
+            } else {
+                throw "cjxl failed"
+            }
+        } catch {
+            Write-Host "[ERROR] Failed to convert: $SourcePath" -ForegroundColor Red
+            if (Test-Path $destPath) { Remove-Item $destPath -Force }
+            $Stats.errors++
+        }
     }
 } else {
     Write-Info "No JPEG images found"
@@ -191,8 +130,70 @@ $videoFiles = $downloadDirs | ForEach-Object {
 
 if ($videoFiles) {
     Write-Info "Found $($videoFiles.Count) MP4 videos to check"
-    foreach ($file in $videoFiles) {
-        Convert-Video $file.FullName
+    $videoFiles | ForEach-Object -ThrottleLimit $ParallelJobs -Parallel {
+        $SourcePath = $_.FullName
+        $Crf = $using:Av1Crf
+        $Preset = $using:Av1Preset
+        $Stats = $using:stats
+        
+        $basePath = [System.IO.Path]::ChangeExtension($SourcePath, $null).TrimEnd('.')
+        $destPath = "${basePath}_av1.mp4"
+        $tempPath = "${basePath}_av1_tmp.mp4"
+        
+        # Check if already converted version exists
+        if (Test-Path $destPath) {
+            Write-Host "[SKIP] AV1 version already exists: $destPath" -ForegroundColor Yellow
+            $Stats.skippedVideos++
+            return
+        }
+        
+        # Check if source is already AV1
+        try {
+            $codec = & ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 $SourcePath 2>$null
+            if ($codec -eq "av1") {
+                Write-Host "[SKIP] Already AV1: $SourcePath" -ForegroundColor Yellow
+                $Stats.skippedVideos++
+                return
+            }
+        } catch {}
+        
+        Write-Host "[INFO] Re-encoding video: $SourcePath" -ForegroundColor Blue
+        
+        try {
+            & ffmpeg -y -i $SourcePath `
+                -c:v libsvtav1 -crf $Crf -preset $Preset `
+                -c:a copy `
+                -movflags +faststart `
+                $tempPath 2>$null
+            
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $tempPath)) {
+                $srcItem = Get-Item $SourcePath
+                $srcSize = $srcItem.Length
+                $dstSize = (Get-Item $tempPath).Length
+                $savings = [math]::Round(100 - ($dstSize * 100 / $srcSize))
+                
+                # Only keep the new file if it's smaller or similar size
+                if ($dstSize -lt ($srcSize * 1.1)) {
+                    # Preserve original modification time
+                    (Get-Item $tempPath).LastWriteTime = $srcItem.LastWriteTime
+                    
+                    Move-Item $tempPath $destPath -Force
+                    Remove-Item $SourcePath -Force
+                    Write-Host "[OK] Converted: $SourcePath -> $destPath (${savings}% smaller)" -ForegroundColor Green
+                    $Stats.convertedVideos++
+                } else {
+                    Remove-Item $tempPath -Force
+                    Write-Host "[SKIP] AV1 version larger, keeping original: $SourcePath" -ForegroundColor Yellow
+                    $Stats.skippedVideos++
+                }
+            } else {
+                throw "ffmpeg failed"
+            }
+        } catch {
+            Write-Host "[ERROR] Failed to convert: $SourcePath" -ForegroundColor Red
+            if (Test-Path $tempPath) { Remove-Item $tempPath -Force }
+            $Stats.errors++
+        }
     }
 } else {
     Write-Info "No MP4 videos found"
@@ -202,9 +203,9 @@ Write-Host ""
 Write-Host "============================================"
 Write-Host "  Compression Complete"
 Write-Host "============================================"
-Write-Host "Images converted: $script:convertedImages"
-Write-Host "Images skipped: $script:skippedImages"
-Write-Host "Videos converted: $script:convertedVideos"
-Write-Host "Videos skipped: $script:skippedVideos"
-Write-Host "Errors: $script:errors"
+Write-Host "Images converted: $($script:stats.convertedImages)"
+Write-Host "Images skipped: $($script:stats.skippedImages)"
+Write-Host "Videos converted: $($script:stats.convertedVideos)"
+Write-Host "Videos skipped: $($script:stats.skippedVideos)"
+Write-Host "Errors: $($script:stats.errors)"
 Write-Host "============================================"
