@@ -12,18 +12,18 @@
   "license": "MIT",
   "dependencies": {
     "@tanuel/async-queue": "^1.0.1",
-    "axios": "^1.7.2",
-    "chalk": "^5.3.0",
-    "fs-extra": "^11.2.0",
+    "axios": "^1.13.2",
+    "chalk": "^5.6.2",
+    "fs-extra": "^11.3.2",
     "multi-progress-bars": "^5.0.3",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
-    "@types/cli-progress": "^3.11.5",
+    "@types/cli-progress": "^3.11.6",
     "@types/fs-extra": "^11.0.4",
-    "@types/node": "^20.12.12",
-    "@types/yargs": "^17.0.32",
-    "tsx": "^4.11.0",
-    "typescript": "^5.4.5"
+    "@types/node": "^20.19.25",
+    "@types/yargs": "^17.0.35",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
   }
 }

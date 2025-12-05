@@ -73,15 +73,24 @@ const argv = yargs(hideBin(process.argv))
     alias: 'h',
     type: 'string',
     description: 'The host to scrape from',
-    choices: ['kemono.su', 'coomer.su'],
-    default: 'kemono.su',
+    choices: [
+      'kemono.su', 'coomer.su', // Legacy domains
+      'kemono.cr', 'coomer.st', // New domains
+      'n1.kemono.cr', 'n2.kemono.cr', 'n3.kemono.cr', 'n4.kemono.cr', // Kemono subdomains
+      'n1.coomer.st', 'n2.coomer.st', 'n3.coomer.st', 'n4.coomer.st', // Coomer subdomains
+    ],
+    default: 'kemono.cr',
   })
   .option('cdnHost', {
     alias: 'c',
     type: 'string',
     description: 'The CDN host for downloading files',
-    choices: ['c1.kemono.su', 'c5.coomer.su', 'c6.coomer.su'],
-    default: 'c1.kemono.su',
+    choices: [
+      'c1.kemono.su', 'c5.coomer.su', 'c6.coomer.su', // Legacy CDN hosts
+      'n1.kemono.cr', 'n2.kemono.cr', 'n3.kemono.cr', 'n4.kemono.cr', // Kemono CDN subdomains
+      'n1.coomer.st', 'n2.coomer.st', 'n3.coomer.st', 'n4.coomer.st', // Coomer CDN subdomains
+    ],
+    default: 'n2.kemono.cr',
   })
   .option('outputDir', {
     alias: 'o',

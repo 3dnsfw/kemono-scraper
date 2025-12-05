@@ -28,8 +28,8 @@ This project downloads all images from the API. It scrapes posts from a given se
 
 - `--service, -s`: The service to scrape from (choices: `patreon`, `fanbox`, `discord`, `fantia`, `afdian`, `boosty`, `gumroad`, `subscribestar`, `onlyfans`, `fansly`, `candfans`) (required)
 - `--userId, -u`: The user ID to scrape from (required)
-- `--host, -h`: The host to scrape from (choices: `kemono.su`, `coomer.su`, or custom) (default: `kemono.su`)
-- `--cdnHost, -c`: The CDN host for downloading files (choices: `c1.kemono.su`, `c6.coomer.su`, or custom) (default: `c1.kemono.su`)
+- `--host, -h`: The host to scrape from (choices: `kemono.su`, `coomer.su`, `kemono.cr`, `coomer.st`, or subdomains like `n1.kemono.cr`, `n2.kemono.cr`, `n1.coomer.st`, `n3.coomer.st`, etc., or custom) (default: `kemono.cr`)
+- `--cdnHost, -c`: The CDN host for downloading files (choices: legacy CDN hosts or new subdomains like `n1.kemono.cr`, `n2.kemono.cr`, `n1.coomer.st`, `n3.coomer.st`, etc., or custom) (default: `n2.kemono.cr`)
 
 ### Example
 
@@ -42,5 +42,5 @@ pnpm start -s patreon -u 30037948
 You can also specify custom hosts:
 
 ```sh
-pnpm start -s onlyfans -u belledelphine --host coomer.su --cdnHost c6.coomer.su
+pnpm start -s onlyfans -u belledelphine --host coomer.st --cdnHost n1.coomer.st
 ```
