@@ -38,7 +38,8 @@ interface Post {
 }
 
 interface DownloadQueueEntry {
-  url: string;
+  filePath: string;
+  fileName: string;
   outputPath: string;
   postId: string;
 }
@@ -72,25 +73,12 @@ const argv = yargs(hideBin(process.argv))
   .option('host', {
     alias: 'h',
     type: 'string',
-    description: 'The host to scrape from',
+    description: 'The base host to scrape from (subdomains will be tried automatically)',
     choices: [
       'kemono.su', 'coomer.su', // Legacy domains
       'kemono.cr', 'coomer.st', // New domains
-      'n1.kemono.cr', 'n2.kemono.cr', 'n3.kemono.cr', 'n4.kemono.cr', // Kemono subdomains
-      'n1.coomer.st', 'n2.coomer.st', 'n3.coomer.st', 'n4.coomer.st', // Coomer subdomains
     ],
     default: 'kemono.cr',
-  })
-  .option('cdnHost', {
-    alias: 'c',
-    type: 'string',
-    description: 'The CDN host for downloading files',
-    choices: [
-      'c1.kemono.su', 'c5.coomer.su', 'c6.coomer.su', // Legacy CDN hosts
-      'n1.kemono.cr', 'n2.kemono.cr', 'n3.kemono.cr', 'n4.kemono.cr', // Kemono CDN subdomains
-      'n1.coomer.st', 'n2.coomer.st', 'n3.coomer.st', 'n4.coomer.st', // Coomer CDN subdomains
-    ],
-    default: 'n2.kemono.cr',
   })
   .option('outputDir', {
     alias: 'o',
@@ -98,13 +86,30 @@ const argv = yargs(hideBin(process.argv))
     description: 'The output directory for downloads',
     default: 'downloads-%username%',
   })
+  .option('maxPosts', {
+    alias: 'm',
+    type: 'number',
+    description: 'Maximum number of posts to fetch (0 = unlimited, default: 5000)',
+    default: 5000,
+  })
   .help()
   .alias('help', 'help').argv;
 
-const { service, userId, host, cdnHost, outputDir } = argv;
+const { service, userId, host, outputDir, maxPosts } = argv;
 
-const API_URL = `https://${host}/api/v1/${service}/user/${userId}`;
-const DOWNLOAD_URL = `https://${cdnHost}/data`;
+// Determine base domain and subdomain prefix
+const isLegacy = host.includes('.su');
+const baseDomain = isLegacy 
+  ? (host.includes('kemono') ? 'kemono.su' : 'coomer.su')
+  : (host.includes('kemono') ? 'kemono.cr' : 'coomer.st');
+
+// Subdomains to try (n1, n2, n3, n4 for new domains, c1, c5, c6 for legacy)
+const SUBDOMAINS = isLegacy 
+  ? (host.includes('kemono') ? ['c1'] : ['c5', 'c6'])
+  : ['n1', 'n2', 'n3', 'n4'];
+
+let workingApiHost: string | null = null;
+
 // Replace %username% in the output directory with the actual user ID
 const OUTPUT_DIR = outputDir.replace('%username%', userId);
 const PAGE_SIZE = 50;
@@ -120,14 +125,136 @@ const downloadBars = new MultiProgressBars({
 
 const overallProgressBarId = 'Overall Progress';
 
-async function fetchPosts(offset: number = 0): Promise<Post[]> {
-  const url = `${API_URL}?o=${offset}`;
-  const response = await axios.get(url);
-  return response.data;
+// API requires these headers to work
+const API_HEADERS = {
+  'Accept': 'text/css',
+  'Accept-Encoding': 'gzip, deflate'
+};
+
+async function findWorkingApiHost(): Promise<string> {
+  if (workingApiHost) {
+    return workingApiHost;
+  }
+
+  console.log(chalk.yellow(`Finding working API host for ${baseDomain}...`));
+  
+  // API is only on base domain, not subdomains (CDN is on subdomains)
+  // Correct endpoint: /api/v1/{service}/user/{userId}/posts
+  const testUrl = `https://${baseDomain}/api/v1/${service}/user/${userId}/posts?o=0`;
+  console.log(chalk.gray(`Trying ${baseDomain}...`));
+  
+  let retries = 0;
+  const maxRetries = 3;
+  
+  while (retries <= maxRetries) {
+    try {
+      const response = await axios.get(testUrl, { 
+        timeout: 20000,
+        headers: API_HEADERS
+      });
+      // Accept 200 with posts array in response.data.posts
+      if (response.status === 200 && response.data && typeof response.data === 'object') {
+        if (Array.isArray(response.data.posts) || Array.isArray(response.data)) {
+          workingApiHost = baseDomain;
+          console.log(chalk.green(`Using API host: ${baseDomain}`));
+          return baseDomain;
+        }
+      }
+    } catch (error) {
+      if (isAxiosError(error)) {
+        const status = error.response?.status;
+        const statusText = error.response?.statusText;
+        
+        // Handle rate limiting (429) with exponential backoff
+        if (status === 429) {
+          const waitTime = Math.min(1000 * Math.pow(2, retries), 10000); // Max 10 seconds
+          console.log(chalk.yellow(`Rate limited (429). Waiting ${waitTime/1000}s before retry ${retries + 1}/${maxRetries}...`));
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          retries++;
+          continue;
+        }
+        
+        if (retries < maxRetries) {
+          console.log(chalk.gray(`  ${baseDomain} failed: ${status || statusText || error.message}. Retrying...`));
+          await new Promise(resolve => setTimeout(resolve, 2000 * (retries + 1)));
+          retries++;
+          continue;
+        }
+        
+        console.log(chalk.gray(`  ${baseDomain} failed: ${status || statusText || error.message}`));
+      }
+      break;
+    }
+  }
+
+  throw new Error(`Could not find a working API host for ${baseDomain}`);
 }
 
-async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0): Promise<void> {
-  const { url, outputPath, postId } = downloadQueueEntry;
+
+async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Post[], hasMore: boolean }> {
+  const apiHost = await findWorkingApiHost();
+  // Correct API format: /api/v1/{service}/user/{userId}/posts?o=...
+  const url = `https://${apiHost}/api/v1/${service}/user/${userId}/posts?o=${offset}`;
+  
+  if (retries === 0) {
+    console.log(chalk.blue(`Fetching posts (offset: ${offset})...`));
+  }
+  
+  try {
+    const response = await axios.get(url, { 
+      headers: API_HEADERS,
+      timeout: 30000
+    });
+    
+    // Response format: array of posts directly
+    const posts = Array.isArray(response.data) ? response.data : (response.data.posts || []);
+    const count = posts.length;
+    
+    if (retries === 0) {
+      console.log(chalk.green(`Fetched ${count} posts (offset: ${offset})`));
+    }
+    
+    // If we got fewer posts than PAGE_SIZE, we've reached the end
+    const hasMore = count === PAGE_SIZE;
+    
+    return { posts, hasMore };
+  } catch (error) {
+    if (isAxiosError(error)) {
+      const status = error.response?.status;
+      const statusText = error.response?.statusText;
+      const message = error.message;
+      
+      console.log(chalk.red(`Error fetching posts (offset: ${offset}): ${status || statusText || message}`));
+      
+      // Handle rate limiting with exponential backoff
+      if (status === 429 && retries < 5) {
+        const waitTime = Math.min(1000 * Math.pow(2, retries), 10000);
+        console.log(chalk.yellow(`Rate limited (429). Waiting ${waitTime/1000}s before retry ${retries + 1}/5...`));
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        return fetchPosts(offset, retries + 1);
+      }
+      
+      // Retry other errors (except 404)
+      if (retries < 3 && status !== 404) {
+        const waitTime = 2000 * (retries + 1);
+        console.log(chalk.yellow(`Retrying in ${waitTime/1000}s... (attempt ${retries + 1}/3)`));
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        return fetchPosts(offset, retries + 1);
+      }
+      
+      // If 404, return empty array (no more posts)
+      if (status === 404) {
+        console.log(chalk.yellow(`No more posts found (404)`));
+        return { posts: [], hasMore: false };
+      }
+    }
+    throw error;
+  }
+}
+
+async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0, cdnSubdomainIndex = 0): Promise<void> {
+  const { filePath, fileName, outputPath, postId } = downloadQueueEntry;
+  
   downloadBars.addTask(postId, {
     type: 'percentage',
     message: 'Starting...',
@@ -145,8 +272,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0)
       return;
     }
 
-    const response = await axios.get(url, {
+    // Try different CDN subdomains
+    let downloadUrl: string;
+    if (cdnSubdomainIndex < SUBDOMAINS.length) {
+      const subdomain = SUBDOMAINS[cdnSubdomainIndex];
+      const cdnHost = `${subdomain}.${baseDomain}`;
+      downloadUrl = `https://${cdnHost}/data${filePath}?f=${encodeURIComponent(fileName)}`;
+    } else {
+      // Fallback to base domain
+      downloadUrl = `https://${baseDomain}/data${filePath}?f=${encodeURIComponent(fileName)}`;
+    }
+
+    const response = await axios.get(downloadUrl, {
       responseType: 'stream',
+      timeout: 30000,
       onDownloadProgress: progressEvent => {
         if (progressEvent.total) {
           // can calculate percentage
@@ -181,6 +320,15 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0)
     });
   } catch (error) {
     if (isAxiosError(error)) {
+      // Try next CDN subdomain if available
+      if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
+        downloadBars.updateTask(postId, {
+          message: `Trying next CDN host...`,
+          barTransformFn: chalk.yellow,
+        });
+        return downloadFile(downloadQueueEntry, retries, cdnSubdomainIndex + 1);
+      }
+
       downloadBars.updateTask(postId, {
         message: `Error: ${error.response?.status} - ${error.response?.statusText}. Retrying...`,
         barTransformFn: chalk.red,
@@ -191,7 +339,7 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0)
       if (retries < MAX_DOWNLOAD_RETRIES) {
         // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
-        return downloadFile(downloadQueueEntry, retries + 1);
+        return downloadFile(downloadQueueEntry, retries + 1, 0);
       } else {
         // Exceeded max retries
         throw error;
@@ -214,7 +362,7 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
           message: `${completedDownloads}/${totalFiles} Files`,
         });
       }).catch(error => {
-        console.error(`Failed to download ${downloadTask.url}:`, error);
+        console.error(`Failed to download ${downloadTask.fileName}:`, error);
         downloadBars.updateTask(downloadTask.postId, {
           message: `Error: ${error}`,
           barTransformFn: chalk.red,
@@ -239,15 +387,79 @@ try {
 
   await fs.ensureDir(OUTPUT_DIR);
 
+  console.log(chalk.cyan(`Starting to fetch posts for ${service}/${userId}...`));
+
+  const seenPostIds = new Set<string>();
+  
   while (hasMorePosts) {
-    const fetchedPosts = await fetchPosts(offset);
-    if (fetchedPosts.length === 0) {
+    try {
+      const result = await fetchPosts(offset);
+      const fetchedPosts = result.posts;
+      
+      if (!fetchedPosts || fetchedPosts.length === 0) {
+        hasMorePosts = false;
+        break;
+      }
+
+      // Check for duplicates to detect when we've reached the end
+      let newPosts = 0;
+      for (const post of fetchedPosts) {
+        if (!seenPostIds.has(post.id)) {
+          seenPostIds.add(post.id);
+          posts.push(post);
+          newPosts++;
+        }
+      }
+
+      // If we got no new posts, we've reached the end (API is looping or we've seen everything)
+      if (newPosts === 0) {
+        console.log(chalk.yellow(`No new posts found at offset ${offset}, reached end`));
+        hasMorePosts = false;
+        break;
+      }
+
+      // If we got very few new posts (less than 10% of the batch), likely reaching the end
+      const duplicateRatio = (fetchedPosts.length - newPosts) / fetchedPosts.length;
+      if (duplicateRatio > 0.9 && posts.length > 100) {
+        console.log(chalk.yellow(`High duplicate ratio (${(duplicateRatio * 100).toFixed(1)}%), likely reached end`));
+        hasMorePosts = false;
+        break;
+      }
+
+      console.log(chalk.cyan(`Total posts so far: ${posts.length} (${newPosts} new, ${fetchedPosts.length - newPosts} duplicates)`));
+      
+      // Stop if we got fewer posts than PAGE_SIZE (reached actual end)
+      if (fetchedPosts.length < PAGE_SIZE) {
+        console.log(chalk.yellow(`Got fewer than ${PAGE_SIZE} posts, reached end`));
+        hasMorePosts = false;
+        break;
+      }
+      
+      // Safety limit: stop if we've fetched more than the max posts limit
+      const maxPostsLimit = maxPosts > 0 ? maxPosts : 5000;
+      if (posts.length >= maxPostsLimit) {
+        console.log(chalk.yellow(`Reached limit of ${maxPostsLimit} posts, stopping`));
+        hasMorePosts = false;
+        break;
+      }
+      
+      // If we've been fetching for a while and still getting new posts, 
+      // check if we should continue (maybe add a max offset limit)
+      if (offset >= 10000) {
+        console.log(chalk.yellow(`Reached maximum offset of 10000, stopping`));
+        hasMorePosts = false;
+        break;
+      }
+      
+      offset += PAGE_SIZE;
+      
+      // Add small delay between requests to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      console.error(chalk.red(`Failed to fetch posts at offset ${offset}:`), error);
       hasMorePosts = false;
       break;
     }
-
-    posts.push(...fetchedPosts);
-    offset += PAGE_SIZE;
   }
 
   console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
@@ -263,7 +475,8 @@ try {
       const sanitizedFileName = sanitizeFileName(file.name);
       const filePath = path.join(OUTPUT_DIR, sanitizedFileName);
       downloadQueue.push({
-        url: `${DOWNLOAD_URL}${file.path}?f=${encodeURIComponent(file.name)}`,
+        filePath: file.path,
+        fileName: file.name,
         outputPath: filePath,
         postId: post.id,
       });
@@ -282,5 +495,12 @@ try {
   });
   downloadBars.close();
 } catch (error) {
-  console.error(chalk.red(error));
+  console.error(chalk.red('Fatal error:'), error);
+  if (error instanceof Error) {
+    console.error(chalk.red('Error message:'), error.message);
+    if (error.stack) {
+      console.error(chalk.red('Stack trace:'), error.stack);
+    }
+  }
+  process.exit(1);
 }
