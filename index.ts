@@ -261,7 +261,7 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     barTransformFn: chalk.blue,
   });
   try {
-    if (await fs.pathExists(outputPath)) {
+    if (await fileExistsOrCompressed(outputPath)) {
       downloadBars.done(postId, {
         message: `File already exists ${outputPath}`,
         barTransformFn: chalk.green,
@@ -378,6 +378,33 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
 
 function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[\/\\\?%*:|"<>]/g, '_');
+}
+
+// Check if file exists, including compressed versions (jxl for images, av1 for videos)
+async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
+  // Check original file
+  if (await fs.pathExists(filePath)) {
+    return true;
+  }
+  
+  const ext = path.extname(filePath).toLowerCase();
+  const basePath = filePath.slice(0, -ext.length);
+  
+  // Check for JPEG XL version of images
+  if (['.jpg', '.jpeg'].includes(ext)) {
+    if (await fs.pathExists(basePath + '.jxl')) {
+      return true;
+    }
+  }
+  
+  // Check for AV1 re-encoded version of videos
+  if (ext === '.mp4') {
+    if (await fs.pathExists(basePath + '_av1.mp4')) {
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 (async () => {
