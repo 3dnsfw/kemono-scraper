@@ -380,127 +380,129 @@ function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[\/\\\?%*:|"<>]/g, '_');
 }
 
-try {
-  let offset = 0;
-  let hasMorePosts = true;
-  const posts: Post[] = [];
+(async () => {
+  try {
+    let offset = 0;
+    let hasMorePosts = true;
+    const posts: Post[] = [];
 
-  await fs.ensureDir(OUTPUT_DIR);
+    await fs.ensureDir(OUTPUT_DIR);
 
-  console.log(chalk.cyan(`Starting to fetch posts for ${service}/${userId}...`));
+    console.log(chalk.cyan(`Starting to fetch posts for ${service}/${userId}...`));
 
-  const seenPostIds = new Set<string>();
-  
-  while (hasMorePosts) {
-    try {
-      const result = await fetchPosts(offset);
-      const fetchedPosts = result.posts;
-      
-      if (!fetchedPosts || fetchedPosts.length === 0) {
-        hasMorePosts = false;
-        break;
-      }
-
-      // Check for duplicates to detect when we've reached the end
-      let newPosts = 0;
-      for (const post of fetchedPosts) {
-        if (!seenPostIds.has(post.id)) {
-          seenPostIds.add(post.id);
-          posts.push(post);
-          newPosts++;
+    const seenPostIds = new Set<string>();
+    
+    while (hasMorePosts) {
+      try {
+        const result = await fetchPosts(offset);
+        const fetchedPosts = result.posts;
+        
+        if (!fetchedPosts || fetchedPosts.length === 0) {
+          hasMorePosts = false;
+          break;
         }
-      }
 
-      // If we got no new posts, we've reached the end (API is looping or we've seen everything)
-      if (newPosts === 0) {
-        console.log(chalk.yellow(`No new posts found at offset ${offset}, reached end`));
-        hasMorePosts = false;
-        break;
-      }
+        // Check for duplicates to detect when we've reached the end
+        let newPosts = 0;
+        for (const post of fetchedPosts) {
+          if (!seenPostIds.has(post.id)) {
+            seenPostIds.add(post.id);
+            posts.push(post);
+            newPosts++;
+          }
+        }
 
-      // If we got very few new posts (less than 10% of the batch), likely reaching the end
-      const duplicateRatio = (fetchedPosts.length - newPosts) / fetchedPosts.length;
-      if (duplicateRatio > 0.9 && posts.length > 100) {
-        console.log(chalk.yellow(`High duplicate ratio (${(duplicateRatio * 100).toFixed(1)}%), likely reached end`));
-        hasMorePosts = false;
-        break;
-      }
+        // If we got no new posts, we've reached the end (API is looping or we've seen everything)
+        if (newPosts === 0) {
+          console.log(chalk.yellow(`No new posts found at offset ${offset}, reached end`));
+          hasMorePosts = false;
+          break;
+        }
 
-      console.log(chalk.cyan(`Total posts so far: ${posts.length} (${newPosts} new, ${fetchedPosts.length - newPosts} duplicates)`));
-      
-      // Stop if we got fewer posts than PAGE_SIZE (reached actual end)
-      if (fetchedPosts.length < PAGE_SIZE) {
-        console.log(chalk.yellow(`Got fewer than ${PAGE_SIZE} posts, reached end`));
+        // If we got very few new posts (less than 10% of the batch), likely reaching the end
+        const duplicateRatio = (fetchedPosts.length - newPosts) / fetchedPosts.length;
+        if (duplicateRatio > 0.9 && posts.length > 100) {
+          console.log(chalk.yellow(`High duplicate ratio (${(duplicateRatio * 100).toFixed(1)}%), likely reached end`));
+          hasMorePosts = false;
+          break;
+        }
+
+        console.log(chalk.cyan(`Total posts so far: ${posts.length} (${newPosts} new, ${fetchedPosts.length - newPosts} duplicates)`));
+        
+        // Stop if we got fewer posts than PAGE_SIZE (reached actual end)
+        if (fetchedPosts.length < PAGE_SIZE) {
+          console.log(chalk.yellow(`Got fewer than ${PAGE_SIZE} posts, reached end`));
+          hasMorePosts = false;
+          break;
+        }
+        
+        // Safety limit: stop if we've fetched more than the max posts limit
+        const maxPostsLimit = maxPosts > 0 ? maxPosts : 5000;
+        if (posts.length >= maxPostsLimit) {
+          console.log(chalk.yellow(`Reached limit of ${maxPostsLimit} posts, stopping`));
+          hasMorePosts = false;
+          break;
+        }
+        
+        // If we've been fetching for a while and still getting new posts, 
+        // check if we should continue (maybe add a max offset limit)
+        if (offset >= 10000) {
+          console.log(chalk.yellow(`Reached maximum offset of 10000, stopping`));
+          hasMorePosts = false;
+          break;
+        }
+        
+        offset += PAGE_SIZE;
+        
+        // Add small delay between requests to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        console.error(chalk.red(`Failed to fetch posts at offset ${offset}:`), error);
         hasMorePosts = false;
         break;
       }
-      
-      // Safety limit: stop if we've fetched more than the max posts limit
-      const maxPostsLimit = maxPosts > 0 ? maxPosts : 5000;
-      if (posts.length >= maxPostsLimit) {
-        console.log(chalk.yellow(`Reached limit of ${maxPostsLimit} posts, stopping`));
-        hasMorePosts = false;
-        break;
-      }
-      
-      // If we've been fetching for a while and still getting new posts, 
-      // check if we should continue (maybe add a max offset limit)
-      if (offset >= 10000) {
-        console.log(chalk.yellow(`Reached maximum offset of 10000, stopping`));
-        hasMorePosts = false;
-        break;
-      }
-      
-      offset += PAGE_SIZE;
-      
-      // Add small delay between requests to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 500));
-    } catch (error) {
-      console.error(chalk.red(`Failed to fetch posts at offset ${offset}:`), error);
-      hasMorePosts = false;
-      break;
     }
+
+    console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
+
+    const downloadQueue: DownloadQueueEntry[] = [];
+    for (const post of posts) {
+      const postFiles: File[] = post.attachments.slice();
+      if (post.file?.path && !postFiles.some(att => att.path === post.file.path)) {
+        postFiles.push(post.file);
+      }
+
+      for (const file of postFiles) {
+        const sanitizedFileName = sanitizeFileName(file.name);
+        const filePath = path.join(OUTPUT_DIR, sanitizedFileName);
+        downloadQueue.push({
+          filePath: file.path,
+          fileName: file.name,
+          outputPath: filePath,
+          postId: post.id,
+        });
+      }
+    }
+
+    downloadBars.addTask(overallProgressBarId, {
+      type: 'percentage',
+      barTransformFn: chalk.yellow,
+      message: 'Starting downloads...',
+    });
+    await downloadFiles(downloadQueue);
+    downloadBars.done(overallProgressBarId, {
+      message: 'All files downloaded.',
+      barTransformFn: chalk.green,
+    });
+    downloadBars.close();
+  } catch (error) {
+    console.error(chalk.red('Fatal error:'), error);
+    if (error instanceof Error) {
+      console.error(chalk.red('Error message:'), error.message);
+      if (error.stack) {
+        console.error(chalk.red('Stack trace:'), error.stack);
+      }
+    }
+    process.exit(1);
   }
-
-  console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
-
-  const downloadQueue: DownloadQueueEntry[] = [];
-  for (const post of posts) {
-    const postFiles: File[] = post.attachments.slice();
-    if (post.file?.path && !postFiles.some(att => att.path === post.file.path)) {
-      postFiles.push(post.file);
-    }
-
-    for (const file of postFiles) {
-      const sanitizedFileName = sanitizeFileName(file.name);
-      const filePath = path.join(OUTPUT_DIR, sanitizedFileName);
-      downloadQueue.push({
-        filePath: file.path,
-        fileName: file.name,
-        outputPath: filePath,
-        postId: post.id,
-      });
-    }
-  }
-
-  downloadBars.addTask(overallProgressBarId, {
-    type: 'percentage',
-    barTransformFn: chalk.yellow,
-    message: 'Starting downloads...',
-  });
-  await downloadFiles(downloadQueue);
-  downloadBars.done(overallProgressBarId, {
-    message: 'All files downloaded.',
-    barTransformFn: chalk.green,
-  });
-  downloadBars.close();
-} catch (error) {
-  console.error(chalk.red('Fatal error:'), error);
-  if (error instanceof Error) {
-    console.error(chalk.red('Error message:'), error.message);
-    if (error.stack) {
-      console.error(chalk.red('Stack trace:'), error.stack);
-    }
-  }
-  process.exit(1);
-}
+})();
