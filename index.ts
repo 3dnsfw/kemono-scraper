@@ -80,7 +80,7 @@ const argv = yargs(hideBin(process.argv))
     alias: 'c',
     type: 'string',
     description: 'The CDN host for downloading files',
-    choices: ['c1.kemono.su', 'c6.coomer.su'],
+    choices: ['c1.kemono.su', 'c5.coomer.su', 'c6.coomer.su'],
     default: 'c1.kemono.su',
   })
   .option('outputDir', {
