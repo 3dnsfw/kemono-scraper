@@ -58,6 +58,21 @@ jobs:
           # Pass version explicitly for tagged releases
           BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
 
+      - name: Strip executable (reduce size)
+        run: |
+          echo "Before strip:"
+          ls -lh dist || true
+
+          if command -v strip >/dev/null 2>&1; then
+            echo "Stripping dist/${{ matrix.artifact }}..."
+            strip "dist/${{ matrix.artifact }}" || echo "strip failed (possibly unsupported format), continuing without stripping"
+          else
+            echo "strip command not available on this runner, skipping binary stripping"
+          fi
+
+          echo "After strip:"
+          ls -lh dist || true
+
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
