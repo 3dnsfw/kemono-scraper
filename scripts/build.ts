@@ -54,20 +54,19 @@ async function getGitInfo(): Promise<{ version: string; commit: string; branch: 
     // Tagged releases: trust the version provided by CI (e.g. the git tag)
     version = envVersion;
   } else {
-    // Nightly / local builds: prefer an exact tag match, otherwise fall back to a nightly-style version
+    // Nightly / local builds: prefer an exact tag match, otherwise fall back to nightly
     try {
       // Only use the tag if HEAD is exactly on it
       const tagResult = await $`git describe --tags --exact-match 2>/dev/null`.quiet().text();
       const tag = tagResult.trim();
       if (tag) {
         version = tag;
-      } else if (commit !== "unknown") {
-        version = `nightly-${commit}`;
+      } else {
+        // Use simple "nightly" version - commit hash is shown separately
+        version = "nightly";
       }
     } catch {
-      if (commit !== "unknown") {
-        version = `nightly-${commit}`;
-      }
+      version = "nightly";
     }
   }
 
