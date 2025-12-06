@@ -6,6 +6,7 @@ import { hideBin } from 'yargs/helpers';
 import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
 import { AsyncQueue } from "@tanuel/async-queue";
+import yaml from 'js-yaml';
 
 // Catch unhandled promise rejections to prevent silent exits
 process.on('unhandledRejection', (reason, promise) => {
@@ -69,11 +70,63 @@ interface DownloadQueueEntry {
   taskId: string; // Unique ID for progress bar task (prevents collisions)
 }
 
+type ServiceType = 'patreon' | 'fanbox' | 'discord' | 'fantia' | 'afdian' | 'boosty' | 'gumroad' | 'subscribestar' | 'onlyfans' | 'fansly' | 'candfans';
+type HostType = 'kemono.su' | 'coomer.su' | 'kemono.cr' | 'coomer.st';
+
+// Config file structure
+interface CreatorConfig {
+  service: ServiceType;
+  userId: string;
+  host?: HostType;
+  outputDir?: string;
+  maxPosts?: number;
+}
+
+interface Config {
+  // Global defaults
+  host?: HostType;
+  outputDir?: string;
+  maxPosts?: number;
+  // List of creators to scrape
+  creators: CreatorConfig[];
+}
+
+// Load and parse YAML config file
+async function loadConfig(configPath: string): Promise<Config> {
+  const absolutePath = path.resolve(configPath);
+  if (!await fs.pathExists(absolutePath)) {
+    throw new Error(`Config file not found: ${absolutePath}`);
+  }
+  const content = await fs.readFile(absolutePath, 'utf8');
+  const config = yaml.load(content) as Config;
+  
+  if (!config.creators || !Array.isArray(config.creators) || config.creators.length === 0) {
+    throw new Error('Config file must contain a "creators" array with at least one creator');
+  }
+  
+  // Validate each creator
+  for (const creator of config.creators) {
+    if (!creator.service) {
+      throw new Error('Each creator must have a "service" field');
+    }
+    if (!creator.userId) {
+      throw new Error('Each creator must have a "userId" field');
+    }
+  }
+  
+  return config;
+}
+
 const argv = yargs(hideBin(process.argv))
+  .option('config', {
+    alias: 'c',
+    type: 'string',
+    description: 'Path to YAML config file with creators to scrape',
+  })
   .option('service', {
     alias: 's',
     type: 'string',
-    description: 'The service to scrape from',
+    description: 'The service to scrape from (not needed if using --config)',
     choices: [
       'patreon',
       'fanbox',
@@ -87,13 +140,11 @@ const argv = yargs(hideBin(process.argv))
       'fansly',
       'candfans',
     ],
-    demandOption: true,
   })
   .option('userId', {
     alias: 'u',
     type: 'string',
-    description: 'The user ID to scrape from',
-    demandOption: true,
+    description: 'The user ID to scrape from (not needed if using --config)',
   })
   .option('host', {
     alias: 'h',
@@ -117,44 +168,33 @@ const argv = yargs(hideBin(process.argv))
     description: 'Maximum number of posts to fetch (0 = unlimited, default: 5000)',
     default: 5000,
   })
+  .check((argv) => {
+    // Either config file or service+userId must be provided
+    if (!argv.config && (!argv.service || !argv.userId)) {
+      throw new Error('Either --config or both --service and --userId must be provided');
+    }
+    return true;
+  })
   .help()
   .alias('help', 'help')
   .version(APP_VERSION)
   .describe('version', 'Show version information')
   .parseSync();
 
-const { service, userId, host, outputDir, maxPosts } = argv;
-
-// Determine base domain and subdomain prefix
-const isLegacy = host.includes('.su');
-const baseDomain = isLegacy 
-  ? (host.includes('kemono') ? 'kemono.su' : 'coomer.su')
-  : (host.includes('kemono') ? 'kemono.cr' : 'coomer.st');
-
-// Subdomains to try (n1, n2, n3, n4 for new domains, c1, c5, c6 for legacy)
-const SUBDOMAINS = isLegacy 
-  ? (host.includes('kemono') ? ['c1'] : ['c5', 'c6'])
-  : ['n1', 'n2', 'n3', 'n4'];
-
-let workingApiHost: string | null = null;
-
-// Replace %username% in the output directory with the actual user ID
-const OUTPUT_DIR = outputDir.replace('%username%', userId);
-const BLACKLIST_FILE = path.join(OUTPUT_DIR, 'blacklist.json');
+// Constants
 const PAGE_SIZE = 50;
 const MAX_CONCURRENT_DOWNLOADS = 2;
 const MAX_DOWNLOAD_RETRIES = 3;
 const DOWNLOAD_RETRY_WAIT_SECONDS = 10000;
 const MAX_FAILURES_BEFORE_BLACKLIST = 5;
 const STREAM_TIMEOUT_MS = 300000; // 5 minute timeout for stream operations (prevents hangs)
+const BLACKLIST_EXPIRY_MS = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
 
-const downloadBars = new MultiProgressBars({
-  initMessage: 'Downloads',
-  anchor: 'bottom',
-  persist: true,
-});
-
-const overallProgressBarId = 'Overall Progress';
+// API requires these headers to work
+const API_HEADERS = {
+  'Accept': 'text/css',
+  'Accept-Encoding': 'gzip, deflate'
+};
 
 // Blacklist and failure tracking
 interface BlacklistEntry {
@@ -164,36 +204,108 @@ interface BlacklistEntry {
   failureCount: number;
 }
 
-let blacklist: Set<string> = new Set();
-let failureCounts: Map<string, number> = new Map();
-let fileNames: Map<string, string> = new Map(); // Store fileName for each filePath
+// Per-creator scraping context
+interface ScraperContext {
+  service: ServiceType;
+  userId: string;
+  host: HostType;
+  outputDir: string;
+  maxPosts: number;
+  baseDomain: string;
+  subdomains: string[];
+  blacklistFile: string;
+  workingApiHost: string | null;
+  blacklist: Set<string>;
+  failureCounts: Map<string, number>;
+  fileNames: Map<string, string>;
+  addedAtDates: Map<string, string>;
+  downloadBars: MultiProgressBars;
+  overallProgressBarId: string;
+}
 
-// API requires these headers to work
-const API_HEADERS = {
-  'Accept': 'text/css',
-  'Accept-Encoding': 'gzip, deflate'
-};
+// Helper to compute domain config from host
+function getDomainConfig(host: HostType): { baseDomain: string; subdomains: string[] } {
+  const isLegacy = host.includes('.su');
+  const baseDomain = isLegacy 
+    ? (host.includes('kemono') ? 'kemono.su' : 'coomer.su')
+    : (host.includes('kemono') ? 'kemono.cr' : 'coomer.st');
+  const subdomains = isLegacy 
+    ? (host.includes('kemono') ? ['c1'] : ['c5', 'c6'])
+    : ['n1', 'n2', 'n3', 'n4'];
+  return { baseDomain, subdomains };
+}
+
+// Create a new scraper context for a creator
+function createScraperContext(
+  service: ServiceType,
+  userId: string,
+  host: HostType,
+  outputDir: string,
+  maxPosts: number,
+  downloadBars: MultiProgressBars
+): ScraperContext {
+  const { baseDomain, subdomains } = getDomainConfig(host);
+  const resolvedOutputDir = outputDir.replace('%username%', userId);
+  
+  return {
+    service,
+    userId,
+    host,
+    outputDir: resolvedOutputDir,
+    maxPosts,
+    baseDomain,
+    subdomains,
+    blacklistFile: path.join(resolvedOutputDir, 'blacklist.json'),
+    workingApiHost: null,
+    blacklist: new Set(),
+    failureCounts: new Map(),
+    fileNames: new Map(),
+    addedAtDates: new Map(),
+    downloadBars,
+    overallProgressBarId: `${service}/${userId} Progress`,
+  };
+}
 
 // Load blacklist from JSON file
-async function loadBlacklist(): Promise<void> {
+async function loadBlacklist(ctx: ScraperContext): Promise<void> {
   try {
-    if (await fs.pathExists(BLACKLIST_FILE)) {
-      const data = await fs.readJson(BLACKLIST_FILE);
+    if (await fs.pathExists(ctx.blacklistFile)) {
+      const data = await fs.readJson(ctx.blacklistFile);
       if (Array.isArray(data)) {
+        const now = Date.now();
+        let expiredCount = 0;
+        
         for (const entry of data) {
           if (entry.filePath) {
-            blacklist.add(entry.filePath);
+            // Check if entry has expired (older than 2 days)
+            if (entry.addedAt) {
+              const addedTime = new Date(entry.addedAt).getTime();
+              if (now - addedTime > BLACKLIST_EXPIRY_MS) {
+                expiredCount++;
+                continue; // Skip expired entries - they'll be retried
+              }
+              // Preserve the original addedAt date
+              ctx.addedAtDates.set(entry.filePath, entry.addedAt);
+            }
+            
+            ctx.blacklist.add(entry.filePath);
             // Restore failure counts from blacklist entries
             if (entry.failureCount) {
-              failureCounts.set(entry.filePath, entry.failureCount);
+              ctx.failureCounts.set(entry.filePath, entry.failureCount);
             }
             // Restore fileName if available
             if (entry.fileName) {
-              fileNames.set(entry.filePath, entry.fileName);
+              ctx.fileNames.set(entry.filePath, entry.fileName);
             }
           }
         }
-        console.log(chalk.yellow(`Loaded ${blacklist.size} blacklisted items from ${BLACKLIST_FILE}`));
+        
+        if (expiredCount > 0) {
+          console.log(chalk.cyan(`Removed ${expiredCount} expired blacklist entries (older than 2 days) - will retry these downloads`));
+          // Save the updated blacklist without expired entries
+          await saveBlacklist(ctx);
+        }
+        console.log(chalk.yellow(`Loaded ${ctx.blacklist.size} blacklisted items from ${ctx.blacklistFile}`));
       }
     }
   } catch (error) {
@@ -202,77 +314,80 @@ async function loadBlacklist(): Promise<void> {
 }
 
 // Save blacklist to JSON file
-async function saveBlacklist(): Promise<void> {
+async function saveBlacklist(ctx: ScraperContext): Promise<void> {
   try {
     const entries: BlacklistEntry[] = [];
-    for (const filePath of blacklist) {
-      const failureCount = failureCounts.get(filePath) || MAX_FAILURES_BEFORE_BLACKLIST;
-      const fileName = fileNames.get(filePath) || path.basename(filePath);
+    for (const filePath of ctx.blacklist) {
+      const failureCount = ctx.failureCounts.get(filePath) || MAX_FAILURES_BEFORE_BLACKLIST;
+      const fileName = ctx.fileNames.get(filePath) || path.basename(filePath);
+      // Preserve original addedAt date, or use current date for new entries
+      const addedAt = ctx.addedAtDates.get(filePath) || new Date().toISOString();
       entries.push({
         filePath,
         fileName,
-        addedAt: new Date().toISOString(),
+        addedAt,
         failureCount,
       });
     }
-    await fs.writeJson(BLACKLIST_FILE, entries, { spaces: 2 });
+    await fs.writeJson(ctx.blacklistFile, entries, { spaces: 2 });
   } catch (error) {
     console.error(chalk.red(`Error saving blacklist: ${error}`));
   }
 }
 
 // Add an asset to the blacklist
-async function addToBlacklist(filePath: string, fileName: string): Promise<void> {
-  if (!blacklist.has(filePath)) {
-    blacklist.add(filePath);
-    failureCounts.set(filePath, MAX_FAILURES_BEFORE_BLACKLIST);
-    fileNames.set(filePath, fileName);
-    await saveBlacklist();
+async function addToBlacklist(ctx: ScraperContext, filePath: string, fileName: string): Promise<void> {
+  if (!ctx.blacklist.has(filePath)) {
+    ctx.blacklist.add(filePath);
+    ctx.failureCounts.set(filePath, MAX_FAILURES_BEFORE_BLACKLIST);
+    ctx.fileNames.set(filePath, fileName);
+    ctx.addedAtDates.set(filePath, new Date().toISOString()); // Set the addedAt date for expiry tracking
+    await saveBlacklist(ctx);
     console.log(chalk.red(`Added to blacklist (5 failures): ${fileName}`));
   }
 }
 
 // Increment failure count for an asset
-async function recordFailure(filePath: string, fileName: string): Promise<void> {
-  const currentCount = failureCounts.get(filePath) || 0;
+async function recordFailure(ctx: ScraperContext, filePath: string, fileName: string): Promise<void> {
+  const currentCount = ctx.failureCounts.get(filePath) || 0;
   const newCount = currentCount + 1;
-  failureCounts.set(filePath, newCount);
-  fileNames.set(filePath, fileName); // Store fileName for future reference
+  ctx.failureCounts.set(filePath, newCount);
+  ctx.fileNames.set(filePath, fileName); // Store fileName for future reference
   
   if (newCount >= MAX_FAILURES_BEFORE_BLACKLIST) {
-    await addToBlacklist(filePath, fileName);
+    await addToBlacklist(ctx, filePath, fileName);
   }
 }
 
 // Safely update progress bar task (handles missing tasks gracefully)
-function safeUpdateTask(postId: string, update: any): void {
+function safeUpdateTask(ctx: ScraperContext, postId: string, update: any): void {
   try {
-    downloadBars.updateTask(postId, update);
+    ctx.downloadBars.updateTask(postId, update);
   } catch (error) {
     // Task doesn't exist, ignore
   }
 }
 
 // Safely mark progress bar task as done (handles missing tasks gracefully)
-function safeDoneTask(postId: string, update: any): void {
+function safeDoneTask(ctx: ScraperContext, postId: string, update: any): void {
   try {
-    downloadBars.done(postId, update);
+    ctx.downloadBars.done(postId, update);
   } catch (error) {
     // Task doesn't exist, ignore
   }
 }
 
-async function findWorkingApiHost(): Promise<string> {
-  if (workingApiHost) {
-    return workingApiHost;
+async function findWorkingApiHost(ctx: ScraperContext): Promise<string> {
+  if (ctx.workingApiHost) {
+    return ctx.workingApiHost;
   }
 
-  console.log(chalk.yellow(`Finding working API host for ${baseDomain}...`));
+  console.log(chalk.yellow(`Finding working API host for ${ctx.baseDomain}...`));
   
   // API is only on base domain, not subdomains (CDN is on subdomains)
   // Correct endpoint: /api/v1/{service}/user/{userId}/posts
-  const testUrl = `https://${baseDomain}/api/v1/${service}/user/${userId}/posts?o=0`;
-  console.log(chalk.gray(`Trying ${baseDomain}...`));
+  const testUrl = `https://${ctx.baseDomain}/api/v1/${ctx.service}/user/${ctx.userId}/posts?o=0`;
+  console.log(chalk.gray(`Trying ${ctx.baseDomain}...`));
   
   let retries = 0;
   const maxRetries = 3;
@@ -286,9 +401,9 @@ async function findWorkingApiHost(): Promise<string> {
       // Accept 200 with posts array in response.data.posts
       if (response.status === 200 && response.data && typeof response.data === 'object') {
         if (Array.isArray(response.data.posts) || Array.isArray(response.data)) {
-          workingApiHost = baseDomain;
-          console.log(chalk.green(`Using API host: ${baseDomain}`));
-          return baseDomain;
+          ctx.workingApiHost = ctx.baseDomain;
+          console.log(chalk.green(`Using API host: ${ctx.baseDomain}`));
+          return ctx.baseDomain;
         }
       }
     } catch (error) {
@@ -306,26 +421,26 @@ async function findWorkingApiHost(): Promise<string> {
         }
         
         if (retries < maxRetries) {
-          console.log(chalk.gray(`  ${baseDomain} failed: ${status || statusText || error.message}. Retrying...`));
+          console.log(chalk.gray(`  ${ctx.baseDomain} failed: ${status || statusText || error.message}. Retrying...`));
           await new Promise(resolve => setTimeout(resolve, 2000 * (retries + 1)));
           retries++;
           continue;
         }
         
-        console.log(chalk.gray(`  ${baseDomain} failed: ${status || statusText || error.message}`));
+        console.log(chalk.gray(`  ${ctx.baseDomain} failed: ${status || statusText || error.message}`));
       }
       break;
     }
   }
 
-  throw new Error(`Could not find a working API host for ${baseDomain}`);
+  throw new Error(`Could not find a working API host for ${ctx.baseDomain}`);
 }
 
 
-async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Post[], hasMore: boolean }> {
-  const apiHost = await findWorkingApiHost();
+async function fetchPosts(ctx: ScraperContext, offset: number = 0, retries = 0): Promise<{ posts: Post[], hasMore: boolean }> {
+  const apiHost = await findWorkingApiHost(ctx);
   // Correct API format: /api/v1/{service}/user/{userId}/posts?o=...
-  const url = `https://${apiHost}/api/v1/${service}/user/${userId}/posts?o=${offset}`;
+  const url = `https://${apiHost}/api/v1/${ctx.service}/user/${ctx.userId}/posts?o=${offset}`;
   
   if (retries === 0) {
     console.log(chalk.blue(`Fetching posts (offset: ${offset})...`));
@@ -362,7 +477,7 @@ async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Pos
         const waitTime = Math.min(1000 * Math.pow(2, retries), 10000);
         console.log(chalk.yellow(`Rate limited (429). Waiting ${waitTime/1000}s before retry ${retries + 1}/5...`));
         await new Promise(resolve => setTimeout(resolve, waitTime));
-        return fetchPosts(offset, retries + 1);
+        return fetchPosts(ctx, offset, retries + 1);
       }
       
       // Retry other errors (except 404)
@@ -370,7 +485,7 @@ async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Pos
         const waitTime = 2000 * (retries + 1);
         console.log(chalk.yellow(`Retrying in ${waitTime/1000}s... (attempt ${retries + 1}/3)`));
         await new Promise(resolve => setTimeout(resolve, waitTime));
-        return fetchPosts(offset, retries + 1);
+        return fetchPosts(ctx, offset, retries + 1);
       }
       
       // If 404, return empty array (no more posts)
@@ -383,23 +498,23 @@ async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Pos
   }
 }
 
-async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0, cdnSubdomainIndex = 0): Promise<void> {
+async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQueueEntry, retries = 0, cdnSubdomainIndex = 0): Promise<void> {
   const { filePath, fileName, outputPath, taskId } = downloadQueueEntry;
   
   // Check if this asset is blacklisted
-  if (blacklist.has(filePath)) {
-    downloadBars.addTask(taskId, {
+  if (ctx.blacklist.has(filePath)) {
+    ctx.downloadBars.addTask(taskId, {
       type: 'percentage',
       message: 'Blacklisted (skipping)',
       barTransformFn: chalk.yellow,
     });
-    safeDoneTask(taskId, {
+    safeDoneTask(ctx, taskId, {
       message: `Skipped (blacklisted): ${fileName}`,
       barTransformFn: chalk.yellow,
     });
     setTimeout(() => {
       try {
-        downloadBars.removeTask(taskId);
+        ctx.downloadBars.removeTask(taskId);
       } catch (e) {
         // Task already removed, ignore
       }
@@ -407,20 +522,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     return;
   }
   
-  downloadBars.addTask(taskId, {
+  ctx.downloadBars.addTask(taskId, {
     type: 'percentage',
     message: 'Starting...',
     barTransformFn: chalk.blue,
   });
   try {
     if (await fileExistsOrCompressed(outputPath)) {
-      safeDoneTask(taskId, {
+      safeDoneTask(ctx, taskId, {
         message: `File already exists ${outputPath}`,
         barTransformFn: chalk.green,
       });
       setTimeout(() => {
         try {
-          downloadBars.removeTask(taskId);
+          ctx.downloadBars.removeTask(taskId);
         } catch (e) {
           // Task already removed, ignore
         }
@@ -430,13 +545,13 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
 
     // Try different CDN subdomains
     let downloadUrl: string;
-    if (cdnSubdomainIndex < SUBDOMAINS.length) {
-      const subdomain = SUBDOMAINS[cdnSubdomainIndex];
-      const cdnHost = `${subdomain}.${baseDomain}`;
+    if (cdnSubdomainIndex < ctx.subdomains.length) {
+      const subdomain = ctx.subdomains[cdnSubdomainIndex];
+      const cdnHost = `${subdomain}.${ctx.baseDomain}`;
       downloadUrl = `https://${cdnHost}/data${filePath}?f=${encodeURIComponent(fileName)}`;
     } else {
       // Fallback to base domain
-      downloadUrl = `https://${baseDomain}/data${filePath}?f=${encodeURIComponent(fileName)}`;
+      downloadUrl = `https://${ctx.baseDomain}/data${filePath}?f=${encodeURIComponent(fileName)}`;
     }
 
     // Use a temp file for downloading to avoid partial files
@@ -457,12 +572,12 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       onDownloadProgress: progressEvent => {
         if (progressEvent.total) {
           // can calculate percentage
-          safeUpdateTask(taskId, {
+          safeUpdateTask(ctx, taskId, {
             percentage: progressEvent.loaded / progressEvent.total,
             message: chalk.blue(`Downloading`),
           });
         } else {
-          safeUpdateTask(taskId, {
+          safeUpdateTask(ctx, taskId, {
             percentage: progressEvent.loaded ? 100 : 0,
             message: chalk.blue(`Downloading`),
           });
@@ -473,14 +588,14 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     // Check for 500 errors before processing the stream
     if (response.status === 500) {
       // Immediately blacklist and abort on 500 errors
-      await addToBlacklist(filePath, fileName);
-      safeDoneTask(taskId, {
+      await addToBlacklist(ctx, filePath, fileName);
+      safeDoneTask(ctx, taskId, {
         message: `Blacklisted (500 error): ${fileName}`,
         barTransformFn: chalk.red,
       });
       setTimeout(() => {
         try {
-          downloadBars.removeTask(taskId);
+          ctx.downloadBars.removeTask(taskId);
         } catch (e) {
           // Task already removed, ignore
         }
@@ -532,8 +647,8 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
           // Ignore cleanup errors
         }
         
-        await recordFailure(filePath, fileName);
-        safeUpdateTask(taskId, {
+        await recordFailure(ctx, filePath, fileName);
+        safeUpdateTask(ctx, taskId, {
           message: errorMessage,
           barTransformFn: chalk.red,
         });
@@ -630,13 +745,13 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
           }
         }
 
-        safeDoneTask(taskId, {
+        safeDoneTask(ctx, taskId, {
           message: `Downloaded as ${outputPath}`,
           barTransformFn: chalk.green,
         });
         setTimeout(() => {
           try {
-            downloadBars.removeTask(taskId);
+            ctx.downloadBars.removeTask(taskId);
           } catch (error) {
             // Task already removed, ignore
           }
@@ -687,20 +802,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       
       // Handle connection errors (ECONNRESET, ECONNABORTED, ETIMEDOUT)
       if (errorCode === 'ECONNRESET' || errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT') {
-        await recordFailure(filePath, fileName);
-        safeUpdateTask(taskId, {
+        await recordFailure(ctx, filePath, fileName);
+        safeUpdateTask(ctx, taskId, {
           message: `Connection error (${errorCode}). ${retries < MAX_DOWNLOAD_RETRIES ? 'Retrying...' : 'Failed'}`,
           barTransformFn: chalk.red,
         });
         
         if (retries < MAX_DOWNLOAD_RETRIES) {
           // Try next CDN subdomain if available
-          if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
-            return downloadFile(downloadQueueEntry, retries, cdnSubdomainIndex + 1);
+          if (cdnSubdomainIndex < ctx.subdomains.length - 1) {
+            return downloadFile(ctx, downloadQueueEntry, retries, cdnSubdomainIndex + 1);
           }
           // Wait before retrying
           await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
-          return downloadFile(downloadQueueEntry, retries + 1, 0);
+          return downloadFile(ctx, downloadQueueEntry, retries + 1, 0);
         } else {
           // Exceeded max retries
           throw error;
@@ -709,14 +824,14 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       
       // Handle 500 Internal Server Error - immediately blacklist and abort
       if (status === 500) {
-        await addToBlacklist(filePath, fileName);
-        safeDoneTask(taskId, {
+        await addToBlacklist(ctx, filePath, fileName);
+        safeDoneTask(ctx, taskId, {
           message: `Blacklisted (500 error): ${fileName}`,
           barTransformFn: chalk.red,
         });
         setTimeout(() => {
           try {
-            downloadBars.removeTask(taskId);
+            ctx.downloadBars.removeTask(taskId);
           } catch (e) {
             // Task already removed, ignore
           }
@@ -725,20 +840,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       }
       
       // Try next CDN subdomain if available
-      if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
-        safeUpdateTask(taskId, {
+      if (cdnSubdomainIndex < ctx.subdomains.length - 1) {
+        safeUpdateTask(ctx, taskId, {
           message: `Trying next CDN host...`,
           barTransformFn: chalk.yellow,
         });
-        return downloadFile(downloadQueueEntry, retries, cdnSubdomainIndex + 1);
+        return downloadFile(ctx, downloadQueueEntry, retries, cdnSubdomainIndex + 1);
       }
 
-      safeUpdateTask(taskId, {
+      safeUpdateTask(ctx, taskId, {
         message: `Error: ${status || 'Unknown'} - ${error.response?.statusText || 'Unknown'}. Retrying...`,
         barTransformFn: chalk.red,
       });
       try {
-        downloadBars.restartTask(taskId, {
+        ctx.downloadBars.restartTask(taskId, {
           barTransformFn: chalk.blue,
         });
       } catch (e) {
@@ -747,20 +862,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       if (retries < MAX_DOWNLOAD_RETRIES) {
         // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
-        return downloadFile(downloadQueueEntry, retries + 1, 0);
+        return downloadFile(ctx, downloadQueueEntry, retries + 1, 0);
       } else {
         // Exceeded max retries - record failure
-        await recordFailure(filePath, fileName);
+        await recordFailure(ctx, filePath, fileName);
         throw error;
       }
     } else {
       // Non-Axios error (e.g., file system error, timeout)
-      await recordFailure(filePath, fileName);
+      await recordFailure(ctx, filePath, fileName);
       
       const errorMessage = error instanceof Error ? error.message : String(error);
       const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('stalled');
       
-      safeUpdateTask(taskId, {
+      safeUpdateTask(ctx, taskId, {
         message: `Error: ${errorMessage}`,
         barTransformFn: chalk.red,
       });
@@ -768,7 +883,7 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       // For timeout/stall errors, retry if we haven't exceeded max retries
       if (isTimeout && retries < MAX_DOWNLOAD_RETRIES) {
         await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
-        return downloadFile(downloadQueueEntry, retries + 1, 0);
+        return downloadFile(ctx, downloadQueueEntry, retries + 1, 0);
       }
       
       throw error;
@@ -781,7 +896,7 @@ interface DownloadResult {
   failed: DownloadQueueEntry[];
 }
 
-async function downloadFiles(downloadQueue: DownloadQueueEntry[], totalFiles: number, completedSoFar: number): Promise<DownloadResult> {
+async function downloadFiles(ctx: ScraperContext, downloadQueue: DownloadQueueEntry[], totalFiles: number, completedSoFar: number): Promise<DownloadResult> {
   const queue = new AsyncQueue({ limit: MAX_CONCURRENT_DOWNLOADS });
   const failedDownloads: DownloadQueueEntry[] = [];
   
@@ -789,9 +904,9 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[], totalFiles: nu
     let completedDownloads = completedSoFar;
   
     for (const downloadTask of downloadQueue) {
-      queue.push(async () => downloadFile(downloadTask).then(() => {
+      queue.push(async () => downloadFile(ctx, downloadTask).then(() => {
         completedDownloads++;
-        downloadBars.updateTask(overallProgressBarId, {
+        ctx.downloadBars.updateTask(ctx.overallProgressBarId, {
           percentage: completedDownloads / totalFiles,
           message: `${completedDownloads}/${totalFiles} Files`,
         });
@@ -799,14 +914,14 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[], totalFiles: nu
         // Don't log individual errors during download, we'll retry later
         // Just track the failure
         failedDownloads.push(downloadTask);
-        safeUpdateTask(downloadTask.taskId, {
+        safeUpdateTask(ctx, downloadTask.taskId, {
           message: `Error: ${error instanceof Error ? error.message : String(error)}`,
           barTransformFn: chalk.red,
         });
         // Remove the task after a short delay to avoid clutter
         setTimeout(() => {
           try {
-            downloadBars.removeTask(downloadTask.taskId);
+            ctx.downloadBars.removeTask(downloadTask.taskId);
           } catch (e) {
             // Ignore
           }
@@ -822,7 +937,7 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[], totalFiles: nu
 
 const MAX_RETRY_PASSES = 3;
 
-async function downloadAllWithRetries(downloadQueue: DownloadQueueEntry[]): Promise<void> {
+async function downloadAllWithRetries(ctx: ScraperContext, downloadQueue: DownloadQueueEntry[]): Promise<void> {
   const totalFiles = downloadQueue.length;
   let currentQueue = downloadQueue;
   let completedTotal = 0;
@@ -837,11 +952,11 @@ async function downloadAllWithRetries(downloadQueue: DownloadQueueEntry[]): Prom
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
 
-    const result = await downloadFiles(currentQueue, totalFiles, completedTotal);
+    const result = await downloadFiles(ctx, currentQueue, totalFiles, completedTotal);
     completedTotal = result.completed;
     
     // Filter out blacklisted files from retry queue
-    currentQueue = result.failed.filter(task => !blacklist.has(task.filePath));
+    currentQueue = result.failed.filter(task => !ctx.blacklist.has(task.filePath));
     
     if (currentQueue.length > 0 && passNumber < MAX_RETRY_PASSES) {
       console.log(chalk.yellow(`${currentQueue.length} download(s) failed, will retry...`));
@@ -853,7 +968,7 @@ async function downloadAllWithRetries(downloadQueue: DownloadQueueEntry[]): Prom
     console.log(chalk.red(`\n${currentQueue.length} download(s) failed after ${MAX_RETRY_PASSES} passes, adding to blacklist:`));
     for (const task of currentQueue) {
       console.log(chalk.red(`  - ${task.fileName}`));
-      await addToBlacklist(task.filePath, task.fileName);
+      await addToBlacklist(ctx, task.filePath, task.fileName);
     }
   }
 }
@@ -915,160 +1030,225 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
   return false;
 }
 
-(async () => {
-  try {
-    let offset = 0;
-    let hasMorePosts = true;
-    const posts: Post[] = [];
+// Main scraping function for a single creator
+async function scrapeCreator(ctx: ScraperContext): Promise<void> {
+  let offset = 0;
+  let hasMorePosts = true;
+  const posts: Post[] = [];
 
-    await fs.ensureDir(OUTPUT_DIR);
-    
-    // Clean up any leftover temp files from previous failed downloads
-    const cleanedTempFiles = await cleanupTempFiles(OUTPUT_DIR);
-    if (cleanedTempFiles > 0) {
-      console.log(chalk.yellow(`Cleaned up ${cleanedTempFiles} incomplete download(s) from previous run`));
-    }
-    
-    // Load blacklist on startup
-    await loadBlacklist();
+  await fs.ensureDir(ctx.outputDir);
+  
+  // Clean up any leftover temp files from previous failed downloads
+  const cleanedTempFiles = await cleanupTempFiles(ctx.outputDir);
+  if (cleanedTempFiles > 0) {
+    console.log(chalk.yellow(`Cleaned up ${cleanedTempFiles} incomplete download(s) from previous run`));
+  }
+  
+  // Load blacklist on startup
+  await loadBlacklist(ctx);
 
-    console.log(chalk.cyan(`Starting to fetch posts for ${service}/${userId}...`));
+  console.log(chalk.cyan(`Starting to fetch posts for ${ctx.service}/${ctx.userId}...`));
 
-    const seenPostIds = new Set<string>();
-    
-    while (hasMorePosts) {
-      try {
-        const result = await fetchPosts(offset);
-        const fetchedPosts = result.posts;
-        
-        if (!fetchedPosts || fetchedPosts.length === 0) {
-          hasMorePosts = false;
-          break;
-        }
-
-        // Check for duplicates to detect when we've reached the end
-        let newPosts = 0;
-        for (const post of fetchedPosts) {
-          if (!seenPostIds.has(post.id)) {
-            seenPostIds.add(post.id);
-            posts.push(post);
-            newPosts++;
-          }
-        }
-
-        // If we got no new posts, we've reached the end (API is looping or we've seen everything)
-        if (newPosts === 0) {
-          console.log(chalk.yellow(`No new posts found at offset ${offset}, reached end`));
-          hasMorePosts = false;
-          break;
-        }
-
-        // If we got very few new posts (less than 10% of the batch), likely reaching the end
-        const duplicateRatio = (fetchedPosts.length - newPosts) / fetchedPosts.length;
-        if (duplicateRatio > 0.9 && posts.length > 100) {
-          console.log(chalk.yellow(`High duplicate ratio (${(duplicateRatio * 100).toFixed(1)}%), likely reached end`));
-          hasMorePosts = false;
-          break;
-        }
-
-        console.log(chalk.cyan(`Total posts so far: ${posts.length} (${newPosts} new, ${fetchedPosts.length - newPosts} duplicates)`));
-        
-        // Stop if we got fewer posts than PAGE_SIZE (reached actual end)
-        if (fetchedPosts.length < PAGE_SIZE) {
-          console.log(chalk.yellow(`Got fewer than ${PAGE_SIZE} posts, reached end`));
-          hasMorePosts = false;
-          break;
-        }
-        
-        // Safety limit: stop if we've fetched more than the max posts limit
-        const maxPostsLimit = maxPosts > 0 ? maxPosts : 5000;
-        if (posts.length >= maxPostsLimit) {
-          console.log(chalk.yellow(`Reached limit of ${maxPostsLimit} posts, stopping`));
-          hasMorePosts = false;
-          break;
-        }
-        
-        // If we've been fetching for a while and still getting new posts, 
-        // check if we should continue (maybe add a max offset limit)
-        if (offset >= 10000) {
-          console.log(chalk.yellow(`Reached maximum offset of 10000, stopping`));
-          hasMorePosts = false;
-          break;
-        }
-        
-        offset += PAGE_SIZE;
-        
-        // Add small delay between requests to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (error) {
-        console.error(chalk.red(`Failed to fetch posts at offset ${offset}:`), error);
+  const seenPostIds = new Set<string>();
+  
+  while (hasMorePosts) {
+    try {
+      const result = await fetchPosts(ctx, offset);
+      const fetchedPosts = result.posts;
+      
+      if (!fetchedPosts || fetchedPosts.length === 0) {
         hasMorePosts = false;
         break;
       }
-    }
 
-    console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
-
-    const downloadQueue: DownloadQueueEntry[] = [];
-    let taskCounter = 0;
-    for (const post of posts) {
-      const postFiles: File[] = post.attachments.slice();
-      if (post.file?.path && !postFiles.some(att => att.path === post.file.path)) {
-        postFiles.push(post.file);
+      // Check for duplicates to detect when we've reached the end
+      let newPosts = 0;
+      for (const post of fetchedPosts) {
+        if (!seenPostIds.has(post.id)) {
+          seenPostIds.add(post.id);
+          posts.push(post);
+          newPosts++;
+        }
       }
 
-      for (const file of postFiles) {
-        // Skip if blacklisted
-        if (blacklist.has(file.path)) {
-          continue;
+      // If we got no new posts, we've reached the end (API is looping or we've seen everything)
+      if (newPosts === 0) {
+        console.log(chalk.yellow(`No new posts found at offset ${offset}, reached end`));
+        hasMorePosts = false;
+        break;
+      }
+
+      // If we got very few new posts (less than 10% of the batch), likely reaching the end
+      const duplicateRatio = (fetchedPosts.length - newPosts) / fetchedPosts.length;
+      if (duplicateRatio > 0.9 && posts.length > 100) {
+        console.log(chalk.yellow(`High duplicate ratio (${(duplicateRatio * 100).toFixed(1)}%), likely reached end`));
+        hasMorePosts = false;
+        break;
+      }
+
+      console.log(chalk.cyan(`Total posts so far: ${posts.length} (${newPosts} new, ${fetchedPosts.length - newPosts} duplicates)`));
+      
+      // Stop if we got fewer posts than PAGE_SIZE (reached actual end)
+      if (fetchedPosts.length < PAGE_SIZE) {
+        console.log(chalk.yellow(`Got fewer than ${PAGE_SIZE} posts, reached end`));
+        hasMorePosts = false;
+        break;
+      }
+      
+      // Safety limit: stop if we've fetched more than the max posts limit
+      const maxPostsLimit = ctx.maxPosts > 0 ? ctx.maxPosts : 5000;
+      if (posts.length >= maxPostsLimit) {
+        console.log(chalk.yellow(`Reached limit of ${maxPostsLimit} posts, stopping`));
+        hasMorePosts = false;
+        break;
+      }
+      
+      // If we've been fetching for a while and still getting new posts, 
+      // check if we should continue (maybe add a max offset limit)
+      if (offset >= 10000) {
+        console.log(chalk.yellow(`Reached maximum offset of 10000, stopping`));
+        hasMorePosts = false;
+        break;
+      }
+      
+      offset += PAGE_SIZE;
+      
+      // Add small delay between requests to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      console.error(chalk.red(`Failed to fetch posts at offset ${offset}:`), error);
+      hasMorePosts = false;
+      break;
+    }
+  }
+
+  console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
+
+  const downloadQueue: DownloadQueueEntry[] = [];
+  let taskCounter = 0;
+  for (const post of posts) {
+    const postFiles: File[] = post.attachments.slice();
+    if (post.file?.path && !postFiles.some(att => att.path === post.file.path)) {
+      postFiles.push(post.file);
+    }
+
+    for (const file of postFiles) {
+      // Skip if blacklisted
+      if (ctx.blacklist.has(file.path)) {
+        continue;
+      }
+      
+      const sanitizedFileName = sanitizeFileName(file.name);
+      const filePath = path.join(ctx.outputDir, sanitizedFileName);
+      downloadQueue.push({
+        filePath: file.path,
+        fileName: file.name,
+        outputPath: filePath,
+        postId: post.id,
+        taskId: `dl-${++taskCounter}`, // Unique task ID to prevent progress bar collisions
+      });
+    }
+  }
+
+  ctx.downloadBars.addTask(ctx.overallProgressBarId, {
+    type: 'percentage',
+    barTransformFn: chalk.yellow,
+    message: 'Starting downloads...',
+  });
+  await downloadAllWithRetries(ctx, downloadQueue);
+  ctx.downloadBars.done(ctx.overallProgressBarId, {
+    message: 'All files downloaded.',
+    barTransformFn: chalk.green,
+  });
+  
+  // Save blacklist one final time before exiting
+  await saveBlacklist(ctx);
+  
+  // Save last updated timestamp
+  const lastUpdatedPath = path.join(ctx.outputDir, 'lastupdated.txt');
+  const now = new Date();
+  const humanReadableDate = now.toLocaleString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short'
+  });
+  await fs.writeFile(lastUpdatedPath, humanReadableDate, 'utf8');
+  console.log(chalk.green(`Last updated timestamp saved: ${humanReadableDate}`));
+  
+  if (ctx.blacklist.size > 0) {
+    console.log(chalk.yellow(`\nBlacklist: ${ctx.blacklist.size} item(s) are blacklisted and will be skipped in future runs.`));
+  }
+}
+
+// Main entry point
+(async () => {
+  try {
+    // Create shared progress bars instance
+    const downloadBars = new MultiProgressBars({
+      initMessage: 'Downloads',
+      anchor: 'bottom',
+      persist: true,
+    });
+
+    // Check if using config file or CLI arguments
+    if (argv.config) {
+      // Load config file
+      const config = await loadConfig(argv.config);
+      console.log(chalk.cyan(`Loaded config with ${config.creators.length} creator(s)`));
+      
+      // Process each creator
+      for (let i = 0; i < config.creators.length; i++) {
+        const creator = config.creators[i];
+        const creatorNum = i + 1;
+        
+        // Merge global defaults with creator-specific settings
+        const service = creator.service;
+        const userId = creator.userId;
+        const host = creator.host || config.host || (argv.host as HostType);
+        const outputDir = creator.outputDir || config.outputDir || argv.outputDir;
+        const maxPosts = creator.maxPosts ?? config.maxPosts ?? argv.maxPosts;
+        
+        console.log(chalk.magenta(`\n${'='.repeat(60)}`));
+        console.log(chalk.magenta(`[${creatorNum}/${config.creators.length}] Scraping ${service}/${userId}`));
+        console.log(chalk.magenta(`${'='.repeat(60)}\n`));
+        
+        const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars);
+        
+        try {
+          await scrapeCreator(ctx);
+        } catch (error) {
+          console.error(chalk.red(`Error scraping ${service}/${userId}:`), error);
+          // Continue with next creator
         }
         
-        const sanitizedFileName = sanitizeFileName(file.name);
-        const filePath = path.join(OUTPUT_DIR, sanitizedFileName);
-        downloadQueue.push({
-          filePath: file.path,
-          fileName: file.name,
-          outputPath: filePath,
-          postId: post.id,
-          taskId: `dl-${++taskCounter}`, // Unique task ID to prevent progress bar collisions
-        });
+        // Add delay between creators to avoid rate limiting
+        if (i < config.creators.length - 1) {
+          console.log(chalk.gray('\nWaiting 2 seconds before next creator...\n'));
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       }
+      
+      console.log(chalk.green(`\n${'='.repeat(60)}`));
+      console.log(chalk.green(`Finished processing all ${config.creators.length} creator(s)`));
+      console.log(chalk.green(`${'='.repeat(60)}\n`));
+    } else {
+      // Use CLI arguments (single creator mode)
+      const service = argv.service as ServiceType;
+      const userId = argv.userId as string;
+      const host = argv.host as HostType;
+      const outputDir = argv.outputDir;
+      const maxPosts = argv.maxPosts;
+      
+      const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars);
+      await scrapeCreator(ctx);
     }
-
-    downloadBars.addTask(overallProgressBarId, {
-      type: 'percentage',
-      barTransformFn: chalk.yellow,
-      message: 'Starting downloads...',
-    });
-    await downloadAllWithRetries(downloadQueue);
-    downloadBars.done(overallProgressBarId, {
-      message: 'All files downloaded.',
-      barTransformFn: chalk.green,
-    });
+    
     downloadBars.close();
-    
-    // Save blacklist one final time before exiting
-    await saveBlacklist();
-    
-    // Save last updated timestamp
-    const lastUpdatedPath = path.join(OUTPUT_DIR, 'lastupdated.txt');
-    const now = new Date();
-    const humanReadableDate = now.toLocaleString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit',
-      timeZoneName: 'short'
-    });
-    await fs.writeFile(lastUpdatedPath, humanReadableDate, 'utf8');
-    console.log(chalk.green(`Last updated timestamp saved: ${humanReadableDate}`));
-    
-    if (blacklist.size > 0) {
-      console.log(chalk.yellow(`\nBlacklist: ${blacklist.size} item(s) are blacklisted and will be skipped in future runs.`));
-    }
   } catch (error) {
     console.error(chalk.red('Fatal error:'), error);
     if (error instanceof Error) {

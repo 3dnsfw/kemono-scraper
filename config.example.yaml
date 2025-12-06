@@ -1,0 +1,44 @@
+# Kemono Scraper Configuration
+# Copy this file to config.yaml and customize it
+
+# Global defaults (can be overridden per-creator)
+host: kemono.cr          # Options: kemono.cr, coomer.st, kemono.su (legacy), coomer.su (legacy)
+outputDir: downloads-%username%  # %username% is replaced with userId
+maxPosts: 5000           # Maximum posts to fetch (0 = unlimited)
+
+# List of creators to scrape
+creators:
+  # Example Patreon creator
+  - service: patreon
+    userId: "12345678"
+    # Optional overrides:
+    # host: coomer.st
+    # outputDir: custom-folder
+    # maxPosts: 100
+
+  # Example Fanbox creator
+  - service: fanbox
+    userId: "creator_name"
+
+  # Example with custom output directory
+  - service: fantia
+    userId: "98765432"
+    outputDir: fantia-downloads/%username%
+
+  # Example from Coomer
+  - service: onlyfans
+    userId: "username"
+    host: coomer.st
+
+# Supported services:
+# - patreon
+# - fanbox
+# - discord
+# - fantia
+# - afdian
+# - boosty
+# - gumroad
+# - subscribestar
+# - onlyfans (coomer)
+# - fansly (coomer)
+# - candfans

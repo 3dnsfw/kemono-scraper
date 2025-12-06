@@ -54,17 +54,20 @@ bun start -s patreon -u 30037948
 
 | Argument | Alias | Description | Required |
 |----------|-------|-------------|----------|
-| `--service` | `-s` | Service to scrape from | Yes |
-| `--userId` | `-u` | User ID to scrape | Yes |
+| `--config` | `-c` | Path to YAML config file | No* |
+| `--service` | `-s` | Service to scrape from | No* |
+| `--userId` | `-u` | User ID to scrape | No* |
 | `--host` | `-h` | Base host (default: `kemono.cr`) | No |
 | `--outputDir` | `-o` | Output directory (default: `downloads-%username%`) | No |
 | `--maxPosts` | `-m` | Max posts to fetch (default: 5000, 0 = unlimited) | No |
+
+\* Either `--config` OR both `--service` and `--userId` must be provided.
 
 **Supported services:** `patreon`, `fanbox`, `discord`, `fantia`, `afdian`, `boosty`, `gumroad`, `subscribestar`, `onlyfans`, `fansly`, `candfans`
 
 **Supported hosts:** `kemono.cr`, `coomer.st`, `kemono.su`, `coomer.su`
 
-### Examples
+### Single Creator Mode
 
 ```bash
 # Scrape a Patreon creator from Kemono
@@ -79,6 +82,52 @@ bun start -s fansly -u someuser -o ./my-downloads
 # Using the standalone executable
 ./kemono-scraper-linux-x64 -s onlyfans -u belledelphine --host coomer.st
 ```
+
+### Config File Mode (Multiple Creators)
+
+Create a YAML config file to scrape multiple creators in one run:
+
+```bash
+# Copy the example config
+cp config.example.yaml config.yaml
+
+# Edit with your creators
+nano config.yaml
+
+# Run with config file
+bun start --config config.yaml
+
+# Or with standalone executable
+./kemono-scraper-linux-x64 --config config.yaml
+```
+
+**Example `config.yaml`:**
+
+```yaml
+# Global defaults
+host: kemono.cr
+outputDir: downloads-%username%
+maxPosts: 5000
+
+# Creators to scrape
+creators:
+  - service: patreon
+    userId: "12345678"
+
+  - service: fanbox
+    userId: "creator_name"
+
+  - service: onlyfans
+    userId: "username"
+    host: coomer.st  # Override for this creator
+
+  - service: fantia
+    userId: "98765432"
+    outputDir: fantia/%username%  # Custom output dir
+    maxPosts: 100  # Limit posts for this creator
+```
+
+See `config.example.yaml` for a full example with all options.
 
 ## Building Executables
 
