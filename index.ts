@@ -778,12 +778,12 @@ async function downloadAllWithRetries(downloadQueue: DownloadQueueEntry[]): Prom
     }
   }
 
-  // After all retries, record failures for any remaining items
+  // After all retries, blacklist any remaining failed items
   if (currentQueue.length > 0) {
-    console.log(chalk.red(`\n${currentQueue.length} download(s) failed after ${MAX_RETRY_PASSES} passes:`));
+    console.log(chalk.red(`\n${currentQueue.length} download(s) failed after ${MAX_RETRY_PASSES} passes, adding to blacklist:`));
     for (const task of currentQueue) {
       console.log(chalk.red(`  - ${task.fileName}`));
-      await recordFailure(task.filePath, task.fileName);
+      await addToBlacklist(task.filePath, task.fileName);
     }
   }
 }
