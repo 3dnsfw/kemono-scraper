@@ -706,11 +706,17 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
   }
 }
 
-async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
+interface DownloadResult {
+  completed: number;
+  failed: DownloadQueueEntry[];
+}
+
+async function downloadFiles(downloadQueue: DownloadQueueEntry[], totalFiles: number, completedSoFar: number): Promise<DownloadResult> {
   const queue = new AsyncQueue({ limit: MAX_CONCURRENT_DOWNLOADS });
-  return new Promise<void>((resolve, reject) => {
-    let completedDownloads = 0;
-    const totalFiles = downloadQueue.length;
+  const failedDownloads: DownloadQueueEntry[] = [];
+  
+  return new Promise<DownloadResult>((resolve, reject) => {
+    let completedDownloads = completedSoFar;
   
     for (const downloadTask of downloadQueue) {
       queue.push(async () => downloadFile(downloadTask).then(() => {
@@ -720,20 +726,66 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
           message: `${completedDownloads}/${totalFiles} Files`,
         });
       }).catch(async error => {
-        console.error(`Failed to download ${downloadTask.fileName}:`, error);
-        // Record failure (this will also check if we should blacklist)
-        await recordFailure(downloadTask.filePath, downloadTask.fileName);
+        // Don't log individual errors during download, we'll retry later
+        // Just track the failure
+        failedDownloads.push(downloadTask);
         safeUpdateTask(downloadTask.postId, {
           message: `Error: ${error instanceof Error ? error.message : String(error)}`,
           barTransformFn: chalk.red,
         });
+        // Remove the task after a short delay to avoid clutter
+        setTimeout(() => {
+          try {
+            downloadBars.removeTask(downloadTask.postId);
+          } catch (e) {
+            // Ignore
+          }
+        }, 2000);
       }));
     }
   
     queue.on('done', () => {
-      resolve();
+      resolve({ completed: completedDownloads, failed: failedDownloads });
     }).on('reject', e => reject(e));
   });
+}
+
+const MAX_RETRY_PASSES = 3;
+
+async function downloadAllWithRetries(downloadQueue: DownloadQueueEntry[]): Promise<void> {
+  const totalFiles = downloadQueue.length;
+  let currentQueue = downloadQueue;
+  let completedTotal = 0;
+  let passNumber = 0;
+
+  while (currentQueue.length > 0 && passNumber < MAX_RETRY_PASSES) {
+    passNumber++;
+    
+    if (passNumber > 1) {
+      console.log(chalk.yellow(`\nRetry pass ${passNumber - 1}: Retrying ${currentQueue.length} failed download(s)...`));
+      // Wait a bit before retry pass to let the server recover
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    const result = await downloadFiles(currentQueue, totalFiles, completedTotal);
+    completedTotal = result.completed;
+    
+    // Filter out blacklisted files from retry queue
+    currentQueue = result.failed.filter(task => !blacklist.has(task.filePath));
+    
+    if (currentQueue.length > 0 && passNumber < MAX_RETRY_PASSES) {
+      console.log(chalk.yellow(`${currentQueue.length} download(s) failed, will retry...`));
+    }
+  }
+
+  // After all retries, record failures for any remaining items
+  if (currentQueue.length > 0) {
+    console.log(chalk.red(`\n${currentQueue.length} download(s) failed after ${MAX_RETRY_PASSES} passes:`));
+    for (const task of currentQueue) {
+      console.log(chalk.red(`  - ${task.fileName}`));
+      await recordFailure(task.filePath, task.fileName);
+    }
+  }
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -916,7 +968,7 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
       barTransformFn: chalk.yellow,
       message: 'Starting downloads...',
     });
-    await downloadFiles(downloadQueue);
+    await downloadAllWithRetries(downloadQueue);
     downloadBars.done(overallProgressBarId, {
       message: 'All files downloaded.',
       barTransformFn: chalk.green,
