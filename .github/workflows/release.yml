@@ -134,9 +134,17 @@ jobs:
           fi
           LOG_END="${{ steps.release_info.outputs.commit_sha }}"
 
+          # Try semantic commits without merges first
           git log --no-merges --pretty=format:'- %s (%h)' --reverse "${LOG_START}..${LOG_END}" > semantic_changelog.md || true
+
+          # If empty (e.g., only merge commits), fall back to including merges
           if [[ ! -s semantic_changelog.md ]]; then
-            echo "- No commits found for this range." > semantic_changelog.md
+            git log --pretty=format:'- %s (%h)' --reverse "${LOG_START}..${LOG_END}" > semantic_changelog.md || true
+          fi
+
+          # If still empty, emit a placeholder with context
+          if [[ ! -s semantic_changelog.md ]]; then
+            echo "- No commits found for range ${LOG_START}..${LOG_END}." > semantic_changelog.md
           fi
 
           echo "changelog_file=semantic_changelog.md" >> $GITHUB_OUTPUT
