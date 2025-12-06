@@ -125,22 +125,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate changelog (github-changelog-generator)
+      - name: Generate changelog from semantic commit messages
+        id: changelog_fallback
         run: |
-          SINCE_ARG=""
-          if [[ -n "${{ steps.release_info.outputs.since_tag }}" ]]; then
-            SINCE_ARG="--since-tag ${{ steps.release_info.outputs.since_tag }}"
+          LOG_START="${{ steps.release_info.outputs.since_tag }}"
+          if [[ -z "${LOG_START}" ]]; then
+            LOG_START=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+          fi
+          LOG_END="${{ steps.release_info.outputs.commit_sha }}"
+
+          git log --no-merges --pretty=format:'- %s (%h)' --reverse "${LOG_START}..${LOG_END}" > semantic_changelog.md || true
+          if [[ ! -s semantic_changelog.md ]]; then
+            echo "- No commits found for this range." > semantic_changelog.md
           fi
 
-          docker run --rm -v "$PWD":/usr/local/src/your-app \
-            -e CHANGELOG_GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
-            githubchangeloggenerator/github-changelog-generator \
-            --user 3dnsfw \
-            --project kemono-scraper \
-            --token "${{ secrets.GITHUB_TOKEN }}" \
-            --future-release "${{ steps.release_info.outputs.tag_name }}" \
-            $SINCE_ARG \
-            --output generated_changelog.md
+          echo "changelog_file=semantic_changelog.md" >> $GITHUB_OUTPUT
 
       - name: Create Release
         run: |
@@ -180,12 +179,19 @@ jobs:
           
           ### Changelog
           
-          (Auto-generated)
+          (Semantic commits)
           RELEASE_EOF
 
-          if [[ -s generated_changelog.md ]]; then
-            # Drop the top-level heading to keep the release notes compact
-            tail -n +2 generated_changelog.md >> release_body.md
+          CHANGELOG_FILE="${{ steps.changelog_fallback.outputs.changelog_file }}"
+          if [[ -n "${CHANGELOG_FILE}" && -s "${CHANGELOG_FILE}" ]]; then
+            # Drop the top-level heading if present to keep the release notes compact
+            if head -n 1 "${CHANGELOG_FILE}" | grep -q '^# '; then
+              tail -n +2 "${CHANGELOG_FILE}" >> release_body.md
+            else
+              cat "${CHANGELOG_FILE}" >> release_body.md
+            fi
+          else
+            echo "- No changelog entries found." >> release_body.md
           fi
           
           # Build gh release create command
