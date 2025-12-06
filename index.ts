@@ -7,6 +7,18 @@ import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
 import { AsyncQueue } from "@tanuel/async-queue";
 
+// Build-time constants injected by scripts/build.ts via --define
+// These will be replaced at compile time; fallback values used during development
+declare const BUILD_VERSION: string | undefined;
+declare const BUILD_COMMIT: string | undefined;
+declare const BUILD_TIME: string | undefined;
+declare const BUILD_TARGET: string | undefined;
+
+const APP_VERSION = typeof BUILD_VERSION !== 'undefined' ? BUILD_VERSION : 'dev';
+const APP_COMMIT = typeof BUILD_COMMIT !== 'undefined' ? BUILD_COMMIT : 'unknown';
+const APP_BUILD_TIME = typeof BUILD_TIME !== 'undefined' ? BUILD_TIME : 'unknown';
+const APP_BUILD_TARGET = typeof BUILD_TARGET !== 'undefined' ? BUILD_TARGET : 'unknown';
+
 interface File {
   name: string;
   path: string;
@@ -93,7 +105,10 @@ const argv = yargs(hideBin(process.argv))
     default: 5000,
   })
   .help()
-  .alias('help', 'help').parseSync();
+  .alias('help', 'help')
+  .version(APP_VERSION)
+  .describe('version', 'Show version information')
+  .parseSync();
 
 const { service, userId, host, outputDir, maxPosts } = argv;
 
