@@ -34,12 +34,18 @@ async function getGitInfo(): Promise<{ version: string; commit: string; branch: 
   let commit = "unknown";
   let branch = "unknown";
 
-  try {
-    // Try to get tag/describe
-    const describeResult = await $`git describe --tags --always 2>/dev/null`.quiet().text();
-    version = describeResult.trim() || "dev";
-  } catch {
-    // No git tags available
+  // Check for explicit version from environment (set by CI for tagged releases)
+  const envVersion = process.env.BUILD_VERSION?.trim();
+  if (envVersion) {
+    version = envVersion;
+  } else {
+    try {
+      // Try to get tag/describe
+      const describeResult = await $`git describe --tags --always 2>/dev/null`.quiet().text();
+      version = describeResult.trim() || "dev";
+    } catch {
+      // No git tags available
+    }
   }
 
   try {

@@ -54,6 +54,9 @@ jobs:
 
       - name: Build executable
         run: bun run scripts/build.ts ${{ matrix.target }}
+        env:
+          # Pass version explicitly for tagged releases
+          BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
