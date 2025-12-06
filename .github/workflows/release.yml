@@ -90,23 +90,32 @@ jobs:
       - name: Generate release name and tag
         id: release_info
         run: |
+          # Derive current tag/name and changelog window
+          LATEST_STABLE_TAG=$(git tag --list 'v*' --sort=-v:refname | sed -n '1p')
+          PREVIOUS_STABLE_TAG=$(git tag --list 'v*' --sort=-v:refname | sed -n '2p')
+
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             # Tagged release
             TAG_NAME="${{ github.ref_name }}"
             RELEASE_NAME="${TAG_NAME}"
             IS_PRERELEASE=false
+            # Use the previous stable tag (if any) to bound the changelog range
+            SINCE_TAG="${PREVIOUS_STABLE_TAG}"
           else
             # Nightly release - use fixed tag name (only one nightly release exists at a time)
             SHORT_SHA=$(git rev-parse --short HEAD)
             TAG_NAME="nightly"
             RELEASE_NAME="Nightly Build (${SHORT_SHA})"
             IS_PRERELEASE=true
+            # For nightly, diff from latest stable tag (if one exists)
+            SINCE_TAG="${LATEST_STABLE_TAG}"
           fi
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
           echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
           echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
           echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "since_tag=${SINCE_TAG}" >> $GITHUB_OUTPUT
 
       - name: Delete existing nightly release and tag
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -115,6 +124,23 @@ jobs:
           gh release delete nightly --yes --cleanup-tag || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate changelog (github-changelog-generator)
+        run: |
+          SINCE_ARG=""
+          if [[ -n "${{ steps.release_info.outputs.since_tag }}" ]]; then
+            SINCE_ARG="--since-tag ${{ steps.release_info.outputs.since_tag }}"
+          fi
+
+          docker run --rm -v "$PWD":/usr/local/src/your-app \
+            -e CHANGELOG_GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            githubchangeloggenerator/github-changelog-generator \
+            --user 3dnsfw \
+            --project kemono-scraper \
+            --token "${{ secrets.GITHUB_TOKEN }}" \
+            --future-release "${{ steps.release_info.outputs.tag_name }}" \
+            $SINCE_ARG \
+            --output generated_changelog.md
 
       - name: Create Release
         run: |
@@ -128,11 +154,11 @@ jobs:
           
           | Platform | Architecture | File |
           |----------|--------------|------|
-          | Linux | x64 | `kemono-scraper-linux-x64` |
-          | Linux | ARM64 | `kemono-scraper-linux-arm64` |
-          | Windows | x64 | `kemono-scraper-windows-x64.exe` |
-          | macOS | x64 (Intel) | `kemono-scraper-darwin-x64` |
-          | macOS | ARM64 (Apple Silicon) | `kemono-scraper-darwin-arm64` |
+          | Linux | x64 | [kemono-scraper-linux-x64](https://github.com/3dnsfw/kemono-scraper/releases/download/${{ steps.release_info.outputs.tag_name }}/kemono-scraper-linux-x64) |
+          | Linux | ARM64 | [kemono-scraper-linux-arm64](https://github.com/3dnsfw/kemono-scraper/releases/download/${{ steps.release_info.outputs.tag_name }}/kemono-scraper-linux-arm64) |
+          | Windows | x64 | [kemono-scraper-windows-x64.exe](https://github.com/3dnsfw/kemono-scraper/releases/download/${{ steps.release_info.outputs.tag_name }}/kemono-scraper-windows-x64.exe) |
+          | macOS | x64 (Intel) | [kemono-scraper-darwin-x64](https://github.com/3dnsfw/kemono-scraper/releases/download/${{ steps.release_info.outputs.tag_name }}/kemono-scraper-darwin-x64) |
+          | macOS | ARM64 (Apple Silicon) | [kemono-scraper-darwin-arm64](https://github.com/3dnsfw/kemono-scraper/releases/download/${{ steps.release_info.outputs.tag_name }}/kemono-scraper-darwin-arm64) |
           
           ### Usage
           
@@ -149,9 +175,18 @@ jobs:
           
           ### Build Info
           
-          - Commit: `${{ steps.release_info.outputs.commit_sha }}`
+          - Commit: [${{ steps.release_info.outputs.commit_sha }}](https://github.com/3dnsfw/kemono-scraper/commit/${{ steps.release_info.outputs.commit_sha }})
           - Built with Bun
+          
+          ### Changelog
+          
+          (Auto-generated)
           RELEASE_EOF
+
+          if [[ -s generated_changelog.md ]]; then
+            # Drop the top-level heading to keep the release notes compact
+            tail -n +2 generated_changelog.md >> release_body.md
+          fi
           
           # Build gh release create command
           PRERELEASE_FLAG=""
