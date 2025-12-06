@@ -112,10 +112,12 @@ let workingApiHost: string | null = null;
 
 // Replace %username% in the output directory with the actual user ID
 const OUTPUT_DIR = outputDir.replace('%username%', userId);
+const BLACKLIST_FILE = path.join(OUTPUT_DIR, 'blacklist.json');
 const PAGE_SIZE = 50;
 const MAX_CONCURRENT_DOWNLOADS = 2;
 const MAX_DOWNLOAD_RETRIES = 3;
 const DOWNLOAD_RETRY_WAIT_SECONDS = 10000;
+const MAX_FAILURES_BEFORE_BLACKLIST = 5;
 
 const downloadBars = new MultiProgressBars({
   initMessage: 'Downloads',
@@ -125,11 +127,93 @@ const downloadBars = new MultiProgressBars({
 
 const overallProgressBarId = 'Overall Progress';
 
+// Blacklist and failure tracking
+interface BlacklistEntry {
+  filePath: string;
+  fileName: string;
+  addedAt: string;
+  failureCount: number;
+}
+
+let blacklist: Set<string> = new Set();
+let failureCounts: Map<string, number> = new Map();
+let fileNames: Map<string, string> = new Map(); // Store fileName for each filePath
+
 // API requires these headers to work
 const API_HEADERS = {
   'Accept': 'text/css',
   'Accept-Encoding': 'gzip, deflate'
 };
+
+// Load blacklist from JSON file
+async function loadBlacklist(): Promise<void> {
+  try {
+    if (await fs.pathExists(BLACKLIST_FILE)) {
+      const data = await fs.readJson(BLACKLIST_FILE);
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          if (entry.filePath) {
+            blacklist.add(entry.filePath);
+            // Restore failure counts from blacklist entries
+            if (entry.failureCount) {
+              failureCounts.set(entry.filePath, entry.failureCount);
+            }
+            // Restore fileName if available
+            if (entry.fileName) {
+              fileNames.set(entry.filePath, entry.fileName);
+            }
+          }
+        }
+        console.log(chalk.yellow(`Loaded ${blacklist.size} blacklisted items from ${BLACKLIST_FILE}`));
+      }
+    }
+  } catch (error) {
+    console.error(chalk.red(`Error loading blacklist: ${error}`));
+  }
+}
+
+// Save blacklist to JSON file
+async function saveBlacklist(): Promise<void> {
+  try {
+    const entries: BlacklistEntry[] = [];
+    for (const filePath of blacklist) {
+      const failureCount = failureCounts.get(filePath) || MAX_FAILURES_BEFORE_BLACKLIST;
+      const fileName = fileNames.get(filePath) || path.basename(filePath);
+      entries.push({
+        filePath,
+        fileName,
+        addedAt: new Date().toISOString(),
+        failureCount,
+      });
+    }
+    await fs.writeJson(BLACKLIST_FILE, entries, { spaces: 2 });
+  } catch (error) {
+    console.error(chalk.red(`Error saving blacklist: ${error}`));
+  }
+}
+
+// Add an asset to the blacklist
+async function addToBlacklist(filePath: string, fileName: string): Promise<void> {
+  if (!blacklist.has(filePath)) {
+    blacklist.add(filePath);
+    failureCounts.set(filePath, MAX_FAILURES_BEFORE_BLACKLIST);
+    fileNames.set(filePath, fileName);
+    await saveBlacklist();
+    console.log(chalk.red(`Added to blacklist (5 failures): ${fileName}`));
+  }
+}
+
+// Increment failure count for an asset
+async function recordFailure(filePath: string, fileName: string): Promise<void> {
+  const currentCount = failureCounts.get(filePath) || 0;
+  const newCount = currentCount + 1;
+  failureCounts.set(filePath, newCount);
+  fileNames.set(filePath, fileName); // Store fileName for future reference
+  
+  if (newCount >= MAX_FAILURES_BEFORE_BLACKLIST) {
+    await addToBlacklist(filePath, fileName);
+  }
+}
 
 async function findWorkingApiHost(): Promise<string> {
   if (workingApiHost) {
@@ -255,6 +339,23 @@ async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Pos
 async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0, cdnSubdomainIndex = 0): Promise<void> {
   const { filePath, fileName, outputPath, postId } = downloadQueueEntry;
   
+  // Check if this asset is blacklisted
+  if (blacklist.has(filePath)) {
+    downloadBars.addTask(postId, {
+      type: 'percentage',
+      message: 'Blacklisted (skipping)',
+      barTransformFn: chalk.yellow,
+    });
+    downloadBars.done(postId, {
+      message: `Skipped (blacklisted): ${fileName}`,
+      barTransformFn: chalk.yellow,
+    });
+    setTimeout(() => {
+      downloadBars.removeTask(postId);
+    }, 2000);
+    return;
+  }
+  
   downloadBars.addTask(postId, {
     type: 'percentage',
     message: 'Starting...',
@@ -302,6 +403,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       },
     });
 
+    // Check for 500 errors before processing the stream
+    if (response.status === 500) {
+      // Immediately blacklist and abort on 500 errors
+      await addToBlacklist(filePath, fileName);
+      downloadBars.done(postId, {
+        message: `Blacklisted (500 error): ${fileName}`,
+        barTransformFn: chalk.red,
+      });
+      setTimeout(() => {
+        downloadBars.removeTask(postId);
+      }, 2000);
+      return;
+    }
+
     const writer = fs.createWriteStream(outputPath);
     response.data.pipe(writer);
 
@@ -316,10 +431,29 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
         }, 2000);
         resolve();
       });
-      writer.on('error', reject);
+      writer.on('error', async (err) => {
+        // Record failure for file system errors
+        await recordFailure(filePath, fileName);
+        reject(err);
+      });
     });
   } catch (error) {
     if (isAxiosError(error)) {
+      const status = error.response?.status;
+      
+      // Handle 500 Internal Server Error - immediately blacklist and abort
+      if (status === 500) {
+        await addToBlacklist(filePath, fileName);
+        downloadBars.done(postId, {
+          message: `Blacklisted (500 error): ${fileName}`,
+          barTransformFn: chalk.red,
+        });
+        setTimeout(() => {
+          downloadBars.removeTask(postId);
+        }, 2000);
+        return; // Abort, don't retry
+      }
+      
       // Try next CDN subdomain if available
       if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
         downloadBars.updateTask(postId, {
@@ -330,7 +464,7 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       }
 
       downloadBars.updateTask(postId, {
-        message: `Error: ${error.response?.status} - ${error.response?.statusText}. Retrying...`,
+        message: `Error: ${status || 'Unknown'} - ${error.response?.statusText || 'Unknown'}. Retrying...`,
         barTransformFn: chalk.red,
       });
       downloadBars.restartTask(postId, {
@@ -341,9 +475,14 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
         await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
         return downloadFile(downloadQueueEntry, retries + 1, 0);
       } else {
-        // Exceeded max retries
+        // Exceeded max retries - record failure
+        await recordFailure(filePath, fileName);
         throw error;
       }
+    } else {
+      // Non-Axios error (e.g., file system error)
+      await recordFailure(filePath, fileName);
+      throw error;
     }
   }
 }
@@ -361,8 +500,10 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
           percentage: completedDownloads / totalFiles,
           message: `${completedDownloads}/${totalFiles} Files`,
         });
-      }).catch(error => {
+      }).catch(async error => {
         console.error(`Failed to download ${downloadTask.fileName}:`, error);
+        // Record failure (this will also check if we should blacklist)
+        await recordFailure(downloadTask.filePath, downloadTask.fileName);
         downloadBars.updateTask(downloadTask.postId, {
           message: `Error: ${error}`,
           barTransformFn: chalk.red,
@@ -414,6 +555,9 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
     const posts: Post[] = [];
 
     await fs.ensureDir(OUTPUT_DIR);
+    
+    // Load blacklist on startup
+    await loadBlacklist();
 
     console.log(chalk.cyan(`Starting to fetch posts for ${service}/${userId}...`));
 
@@ -500,6 +644,11 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
       }
 
       for (const file of postFiles) {
+        // Skip if blacklisted
+        if (blacklist.has(file.path)) {
+          continue;
+        }
+        
         const sanitizedFileName = sanitizeFileName(file.name);
         const filePath = path.join(OUTPUT_DIR, sanitizedFileName);
         downloadQueue.push({
@@ -522,6 +671,13 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
       barTransformFn: chalk.green,
     });
     downloadBars.close();
+    
+    // Save blacklist one final time before exiting
+    await saveBlacklist();
+    
+    if (blacklist.size > 0) {
+      console.log(chalk.yellow(`\nBlacklist: ${blacklist.size} item(s) are blacklisted and will be skipped in future runs.`));
+    }
   } catch (error) {
     console.error(chalk.red('Fatal error:'), error);
     if (error instanceof Error) {
