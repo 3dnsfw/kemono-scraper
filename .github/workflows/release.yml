@@ -122,6 +122,7 @@ jobs:
           tag_name: ${{ steps.release_info.outputs.tag_name }}
           name: ${{ steps.release_info.outputs.release_name }}
           prerelease: ${{ steps.release_info.outputs.is_prerelease }}
+          draft: false
           generate_release_notes: true
           files: release/*
           body: |
