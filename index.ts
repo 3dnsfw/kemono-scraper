@@ -93,7 +93,7 @@ const argv = yargs(hideBin(process.argv))
     default: 5000,
   })
   .help()
-  .alias('help', 'help').argv;
+  .alias('help', 'help').parseSync();
 
 const { service, userId, host, outputDir, maxPosts } = argv;
 
