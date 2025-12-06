@@ -978,6 +978,22 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
     // Save blacklist one final time before exiting
     await saveBlacklist();
     
+    // Save last updated timestamp
+    const lastUpdatedPath = path.join(OUTPUT_DIR, 'lastupdated.txt');
+    const now = new Date();
+    const humanReadableDate = now.toLocaleString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short'
+    });
+    await fs.writeFile(lastUpdatedPath, humanReadableDate, 'utf8');
+    console.log(chalk.green(`Last updated timestamp saved: ${humanReadableDate}`));
+    
     if (blacklist.size > 0) {
       console.log(chalk.yellow(`\nBlacklist: ${blacklist.size} item(s) are blacklisted and will be skipped in future runs.`));
     }
