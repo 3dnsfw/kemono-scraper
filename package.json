@@ -5,8 +5,14 @@
   "main": "index.ts",
   "type": "module",
   "scripts": {
-    "start": "tsx .",
-    "compress": "node compress.mjs"
+    "start": "bun run .",
+    "compress": "bun run compress.mjs",
+    "build": "bun run scripts/build.ts",
+    "build:linux": "bun run scripts/build.ts linux-x64",
+    "build:linux-arm": "bun run scripts/build.ts linux-arm64",
+    "build:windows": "bun run scripts/build.ts windows-x64",
+    "build:macos": "bun run scripts/build.ts darwin-x64",
+    "build:macos-arm": "bun run scripts/build.ts darwin-arm64"
   },
   "author": "Me",
   "private": true,
@@ -20,11 +26,11 @@
     "yargs": "^17.7.2"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.3",
     "@types/cli-progress": "^3.11.6",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.19.25",
     "@types/yargs": "^17.0.35",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

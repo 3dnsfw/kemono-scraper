@@ -1,0 +1,154 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            artifact: kemono-scraper-linux-x64
+          - os: ubuntu-latest
+            target: linux-arm64
+            artifact: kemono-scraper-linux-arm64
+          - os: ubuntu-latest
+            target: windows-x64
+            artifact: kemono-scraper-windows-x64.exe
+          - os: macos-latest
+            target: darwin-x64
+            artifact: kemono-scraper-darwin-x64
+          - os: macos-latest
+            target: darwin-arm64
+            artifact: kemono-scraper-darwin-arm64
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git describe
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build executable
+        run: bun run scripts/build.ts ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          # Move all artifacts to release directory, flattening structure
+          find artifacts -type f -exec mv {} release/ \;
+          ls -la release/
+
+      - name: Generate release name and tag
+        id: release_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Tagged release
+            TAG_NAME="${{ github.ref_name }}"
+            RELEASE_NAME="${TAG_NAME}"
+            IS_PRERELEASE=false
+          else
+            # Commit-based release
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            TAG_NAME="nightly-${SHORT_SHA}"
+            RELEASE_NAME="Nightly Build (${SHORT_SHA})"
+            IS_PRERELEASE=true
+          fi
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Delete existing nightly release (if exists)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          # Delete any existing nightly release with the same tag
+          gh release delete "${{ steps.release_info.outputs.tag_name }}" --yes || true
+          git push origin :refs/tags/${{ steps.release_info.outputs.tag_name }} || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag_name }}
+          name: ${{ steps.release_info.outputs.release_name }}
+          prerelease: ${{ steps.release_info.outputs.is_prerelease }}
+          generate_release_notes: true
+          files: release/*
+          body: |
+            ## Kemono Scraper
+            
+            Standalone executables for scraping kemono/coomer content.
+            
+            ### Downloads
+            
+            | Platform | Architecture | File |
+            |----------|--------------|------|
+            | Linux | x64 | `kemono-scraper-linux-x64` |
+            | Linux | ARM64 | `kemono-scraper-linux-arm64` |
+            | Windows | x64 | `kemono-scraper-windows-x64.exe` |
+            | macOS | x64 (Intel) | `kemono-scraper-darwin-x64` |
+            | macOS | ARM64 (Apple Silicon) | `kemono-scraper-darwin-arm64` |
+            
+            ### Usage
+            
+            ```bash
+            # Linux/macOS - make executable first
+            chmod +x kemono-scraper-*
+            
+            # Run with required arguments
+            ./kemono-scraper-linux-x64 --service onlyfans --userId USERNAME
+            
+            # Windows
+            kemono-scraper-windows-x64.exe --service onlyfans --userId USERNAME
+            ```
+            
+            ### Build Info
+            
+            - Commit: `${{ steps.release_info.outputs.commit_sha }}`
+            - Built with Bun
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
