@@ -34,20 +34,6 @@ async function getGitInfo(): Promise<{ version: string; commit: string; branch: 
   let commit = "unknown";
   let branch = "unknown";
 
-  // Check for explicit version from environment (set by CI for tagged releases)
-  const envVersion = process.env.BUILD_VERSION?.trim();
-  if (envVersion) {
-    version = envVersion;
-  } else {
-    try {
-      // Try to get tag/describe
-      const describeResult = await $`git describe --tags --always 2>/dev/null`.quiet().text();
-      version = describeResult.trim() || "dev";
-    } catch {
-      // No git tags available
-    }
-  }
-
   try {
     const commitResult = await $`git rev-parse --short HEAD 2>/dev/null`.quiet().text();
     commit = commitResult.trim() || "unknown";
@@ -60,6 +46,29 @@ async function getGitInfo(): Promise<{ version: string; commit: string; branch: 
     branch = branchResult.trim() || "unknown";
   } catch {
     // Not in a git repo
+  }
+
+  // Check for explicit version from environment (set by CI for tagged releases)
+  const envVersion = process.env.BUILD_VERSION?.trim();
+  if (envVersion) {
+    // Tagged releases: trust the version provided by CI (e.g. the git tag)
+    version = envVersion;
+  } else {
+    // Nightly / local builds: prefer an exact tag match, otherwise fall back to a nightly-style version
+    try {
+      // Only use the tag if HEAD is exactly on it
+      const tagResult = await $`git describe --tags --exact-match 2>/dev/null`.quiet().text();
+      const tag = tagResult.trim();
+      if (tag) {
+        version = tag;
+      } else if (commit !== "unknown") {
+        version = `nightly-${commit}`;
+      }
+    } catch {
+      if (commit !== "unknown") {
+        version = `nightly-${commit}`;
+      }
+    }
   }
 
   return { version, commit, branch };

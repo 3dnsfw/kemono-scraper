@@ -7,6 +7,18 @@ import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
 import { AsyncQueue } from "@tanuel/async-queue";
 
+// Catch unhandled promise rejections to prevent silent exits
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(chalk.red('\n[FATAL] Unhandled Promise Rejection:'), reason);
+  console.error(chalk.red('Promise:'), promise);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error(chalk.red('\n[FATAL] Uncaught Exception:'), error);
+  process.exit(1);
+});
+
 // Build-time constants injected by scripts/build.ts via --define
 // These will be replaced at compile time; fallback values used during development
 declare const BUILD_VERSION: string | undefined;
@@ -54,6 +66,7 @@ interface DownloadQueueEntry {
   fileName: string;
   outputPath: string;
   postId: string;
+  taskId: string; // Unique ID for progress bar task (prevents collisions)
 }
 
 const argv = yargs(hideBin(process.argv))
@@ -133,6 +146,7 @@ const MAX_CONCURRENT_DOWNLOADS = 2;
 const MAX_DOWNLOAD_RETRIES = 3;
 const DOWNLOAD_RETRY_WAIT_SECONDS = 10000;
 const MAX_FAILURES_BEFORE_BLACKLIST = 5;
+const STREAM_TIMEOUT_MS = 300000; // 5 minute timeout for stream operations (prevents hangs)
 
 const downloadBars = new MultiProgressBars({
   initMessage: 'Downloads',
@@ -370,22 +384,22 @@ async function fetchPosts(offset: number = 0, retries = 0): Promise<{ posts: Pos
 }
 
 async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0, cdnSubdomainIndex = 0): Promise<void> {
-  const { filePath, fileName, outputPath, postId } = downloadQueueEntry;
+  const { filePath, fileName, outputPath, taskId } = downloadQueueEntry;
   
   // Check if this asset is blacklisted
   if (blacklist.has(filePath)) {
-    downloadBars.addTask(postId, {
+    downloadBars.addTask(taskId, {
       type: 'percentage',
       message: 'Blacklisted (skipping)',
       barTransformFn: chalk.yellow,
     });
-    safeDoneTask(postId, {
+    safeDoneTask(taskId, {
       message: `Skipped (blacklisted): ${fileName}`,
       barTransformFn: chalk.yellow,
     });
     setTimeout(() => {
       try {
-        downloadBars.removeTask(postId);
+        downloadBars.removeTask(taskId);
       } catch (e) {
         // Task already removed, ignore
       }
@@ -393,20 +407,20 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     return;
   }
   
-  downloadBars.addTask(postId, {
+  downloadBars.addTask(taskId, {
     type: 'percentage',
     message: 'Starting...',
     barTransformFn: chalk.blue,
   });
   try {
     if (await fileExistsOrCompressed(outputPath)) {
-      safeDoneTask(postId, {
+      safeDoneTask(taskId, {
         message: `File already exists ${outputPath}`,
         barTransformFn: chalk.green,
       });
       setTimeout(() => {
         try {
-          downloadBars.removeTask(postId);
+          downloadBars.removeTask(taskId);
         } catch (e) {
           // Task already removed, ignore
         }
@@ -443,12 +457,12 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       onDownloadProgress: progressEvent => {
         if (progressEvent.total) {
           // can calculate percentage
-          safeUpdateTask(postId, {
+          safeUpdateTask(taskId, {
             percentage: progressEvent.loaded / progressEvent.total,
             message: chalk.blue(`Downloading`),
           });
         } else {
-          safeUpdateTask(postId, {
+          safeUpdateTask(taskId, {
             percentage: progressEvent.loaded ? 100 : 0,
             message: chalk.blue(`Downloading`),
           });
@@ -460,13 +474,13 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     if (response.status === 500) {
       // Immediately blacklist and abort on 500 errors
       await addToBlacklist(filePath, fileName);
-      safeDoneTask(postId, {
+      safeDoneTask(taskId, {
         message: `Blacklisted (500 error): ${fileName}`,
         barTransformFn: chalk.red,
       });
       setTimeout(() => {
         try {
-          downloadBars.removeTask(postId);
+          downloadBars.removeTask(taskId);
         } catch (e) {
           // Task already removed, ignore
         }
@@ -480,9 +494,11 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     let streamEnded = false;
     let streamError: Error | null = null;
 
-    return new Promise((resolve, reject) => {
+    // Create the stream promise with a timeout to prevent hangs
+    const streamPromise = new Promise<void>((resolve, reject) => {
       let isResolved = false;
       let isRejected = false;
+      let lastProgress = Date.now();
 
       // Helper to safely cleanup and reject
       const safeReject = async (err: Error, errorMessage: string) => {
@@ -517,16 +533,17 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
         }
         
         await recordFailure(filePath, fileName);
-        safeUpdateTask(postId, {
+        safeUpdateTask(taskId, {
           message: errorMessage,
           barTransformFn: chalk.red,
         });
         reject(err);
       };
 
-      // Track bytes downloaded
+      // Track bytes downloaded and update last progress time
       response.data.on('data', (chunk: Buffer) => {
         downloadedBytes += chunk.length;
+        lastProgress = Date.now();
       });
 
       // Handle response stream errors
@@ -540,8 +557,25 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       });
 
       response.data.pipe(writer);
+
+      // Stall detection - if no data received for 60 seconds, consider it hung
+      const stallCheckInterval = setInterval(async () => {
+        if (isResolved || isRejected) {
+          clearInterval(stallCheckInterval);
+          return;
+        }
+        const stallTime = Date.now() - lastProgress;
+        if (stallTime > 60000) { // 60 second stall timeout
+          clearInterval(stallCheckInterval);
+          await safeReject(
+            new Error(`Download stalled (no data for ${Math.round(stallTime / 1000)}s)`),
+            `Download stalled (no data for ${Math.round(stallTime / 1000)}s)`
+          );
+        }
+      }, 10000);
       
       writer.on('finish', async () => {
+        clearInterval(stallCheckInterval);
         if (isResolved || isRejected) return;
         
         // Verify the download completed successfully
@@ -596,13 +630,13 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
           }
         }
 
-        safeDoneTask(postId, {
+        safeDoneTask(taskId, {
           message: `Downloaded as ${outputPath}`,
           barTransformFn: chalk.green,
         });
         setTimeout(() => {
           try {
-            downloadBars.removeTask(postId);
+            downloadBars.removeTask(taskId);
           } catch (error) {
             // Task already removed, ignore
           }
@@ -611,6 +645,7 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       });
       
       writer.on('error', async (err) => {
+        clearInterval(stallCheckInterval);
         // Ignore errors if writer was destroyed by us (streamError is set)
         if (streamError) {
           return; // Already handled
@@ -626,6 +661,15 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
         await safeReject(err, `Write error: ${err.message}`);
       });
     });
+
+    // Add overall timeout for the stream operation
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Download timeout after ${STREAM_TIMEOUT_MS / 1000}s`));
+      }, STREAM_TIMEOUT_MS);
+    });
+
+    return Promise.race([streamPromise, timeoutPromise]);
   } catch (error) {
     // Clean up incomplete temp file if it exists
     const tempPathCleanup = getTempPath(outputPath);
@@ -644,7 +688,7 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       // Handle connection errors (ECONNRESET, ECONNABORTED, ETIMEDOUT)
       if (errorCode === 'ECONNRESET' || errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT') {
         await recordFailure(filePath, fileName);
-        safeUpdateTask(postId, {
+        safeUpdateTask(taskId, {
           message: `Connection error (${errorCode}). ${retries < MAX_DOWNLOAD_RETRIES ? 'Retrying...' : 'Failed'}`,
           barTransformFn: chalk.red,
         });
@@ -666,13 +710,13 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       // Handle 500 Internal Server Error - immediately blacklist and abort
       if (status === 500) {
         await addToBlacklist(filePath, fileName);
-        safeDoneTask(postId, {
+        safeDoneTask(taskId, {
           message: `Blacklisted (500 error): ${fileName}`,
           barTransformFn: chalk.red,
         });
         setTimeout(() => {
           try {
-            downloadBars.removeTask(postId);
+            downloadBars.removeTask(taskId);
           } catch (e) {
             // Task already removed, ignore
           }
@@ -682,19 +726,19 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       
       // Try next CDN subdomain if available
       if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
-        safeUpdateTask(postId, {
+        safeUpdateTask(taskId, {
           message: `Trying next CDN host...`,
           barTransformFn: chalk.yellow,
         });
         return downloadFile(downloadQueueEntry, retries, cdnSubdomainIndex + 1);
       }
 
-      safeUpdateTask(postId, {
+      safeUpdateTask(taskId, {
         message: `Error: ${status || 'Unknown'} - ${error.response?.statusText || 'Unknown'}. Retrying...`,
         barTransformFn: chalk.red,
       });
       try {
-        downloadBars.restartTask(postId, {
+        downloadBars.restartTask(taskId, {
           barTransformFn: chalk.blue,
         });
       } catch (e) {
@@ -710,12 +754,23 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
         throw error;
       }
     } else {
-      // Non-Axios error (e.g., file system error)
+      // Non-Axios error (e.g., file system error, timeout)
       await recordFailure(filePath, fileName);
-      safeUpdateTask(postId, {
-        message: `Error: ${error instanceof Error ? error.message : String(error)}`,
+      
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('stalled');
+      
+      safeUpdateTask(taskId, {
+        message: `Error: ${errorMessage}`,
         barTransformFn: chalk.red,
       });
+      
+      // For timeout/stall errors, retry if we haven't exceeded max retries
+      if (isTimeout && retries < MAX_DOWNLOAD_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
+        return downloadFile(downloadQueueEntry, retries + 1, 0);
+      }
+      
       throw error;
     }
   }
@@ -744,14 +799,14 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[], totalFiles: nu
         // Don't log individual errors during download, we'll retry later
         // Just track the failure
         failedDownloads.push(downloadTask);
-        safeUpdateTask(downloadTask.postId, {
+        safeUpdateTask(downloadTask.taskId, {
           message: `Error: ${error instanceof Error ? error.message : String(error)}`,
           barTransformFn: chalk.red,
         });
         // Remove the task after a short delay to avoid clutter
         setTimeout(() => {
           try {
-            downloadBars.removeTask(downloadTask.postId);
+            downloadBars.removeTask(downloadTask.taskId);
           } catch (e) {
             // Ignore
           }
@@ -955,6 +1010,7 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
     console.log(chalk.yellow(`Loaded ${posts.length} posts.`));
 
     const downloadQueue: DownloadQueueEntry[] = [];
+    let taskCounter = 0;
     for (const post of posts) {
       const postFiles: File[] = post.attachments.slice();
       if (post.file?.path && !postFiles.some(att => att.path === post.file.path)) {
@@ -974,6 +1030,7 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
           fileName: file.name,
           outputPath: filePath,
           postId: post.id,
+          taskId: `dl-${++taskCounter}`, // Unique task ID to prevent progress bar collisions
         });
       }
     }
