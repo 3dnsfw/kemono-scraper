@@ -215,6 +215,24 @@ async function recordFailure(filePath: string, fileName: string): Promise<void> 
   }
 }
 
+// Safely update progress bar task (handles missing tasks gracefully)
+function safeUpdateTask(postId: string, update: any): void {
+  try {
+    downloadBars.updateTask(postId, update);
+  } catch (error) {
+    // Task doesn't exist, ignore
+  }
+}
+
+// Safely mark progress bar task as done (handles missing tasks gracefully)
+function safeDoneTask(postId: string, update: any): void {
+  try {
+    downloadBars.done(postId, update);
+  } catch (error) {
+    // Task doesn't exist, ignore
+  }
+}
+
 async function findWorkingApiHost(): Promise<string> {
   if (workingApiHost) {
     return workingApiHost;
@@ -346,12 +364,16 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       message: 'Blacklisted (skipping)',
       barTransformFn: chalk.yellow,
     });
-    downloadBars.done(postId, {
+    safeDoneTask(postId, {
       message: `Skipped (blacklisted): ${fileName}`,
       barTransformFn: chalk.yellow,
     });
     setTimeout(() => {
-      downloadBars.removeTask(postId);
+      try {
+        downloadBars.removeTask(postId);
+      } catch (e) {
+        // Task already removed, ignore
+      }
     }, 2000);
     return;
   }
@@ -363,12 +385,16 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
   });
   try {
     if (await fileExistsOrCompressed(outputPath)) {
-      downloadBars.done(postId, {
+      safeDoneTask(postId, {
         message: `File already exists ${outputPath}`,
         barTransformFn: chalk.green,
       });
       setTimeout(() => {
-        downloadBars.removeTask(postId);
+        try {
+          downloadBars.removeTask(postId);
+        } catch (e) {
+          // Task already removed, ignore
+        }
       }, 2000);
       return;
     }
@@ -384,18 +410,30 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
       downloadUrl = `https://${baseDomain}/data${filePath}?f=${encodeURIComponent(fileName)}`;
     }
 
+    // Use a temp file for downloading to avoid partial files
+    const tempPath = getTempPath(outputPath);
+    
+    // Clean up any existing temp file from previous failed download
+    try {
+      if (await fs.pathExists(tempPath)) {
+        await fs.remove(tempPath);
+      }
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+
     const response = await axios.get(downloadUrl, {
       responseType: 'stream',
-      timeout: 30000,
+      timeout: 120000, // Increased timeout to 2 minutes for large files
       onDownloadProgress: progressEvent => {
         if (progressEvent.total) {
           // can calculate percentage
-          downloadBars.updateTask(postId, {
+          safeUpdateTask(postId, {
             percentage: progressEvent.loaded / progressEvent.total,
             message: chalk.blue(`Downloading`),
           });
         } else {
-          downloadBars.updateTask(postId, {
+          safeUpdateTask(postId, {
             percentage: progressEvent.loaded ? 100 : 0,
             message: chalk.blue(`Downloading`),
           });
@@ -407,69 +445,246 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     if (response.status === 500) {
       // Immediately blacklist and abort on 500 errors
       await addToBlacklist(filePath, fileName);
-      downloadBars.done(postId, {
+      safeDoneTask(postId, {
         message: `Blacklisted (500 error): ${fileName}`,
         barTransformFn: chalk.red,
       });
       setTimeout(() => {
-        downloadBars.removeTask(postId);
+        try {
+          downloadBars.removeTask(postId);
+        } catch (e) {
+          // Task already removed, ignore
+        }
       }, 2000);
       return;
     }
 
-    const writer = fs.createWriteStream(outputPath);
-    response.data.pipe(writer);
+    const writer = fs.createWriteStream(tempPath);
+    const expectedSize = response.headers['content-length'] ? parseInt(response.headers['content-length'], 10) : null;
+    let downloadedBytes = 0;
+    let streamEnded = false;
+    let streamError: Error | null = null;
 
     return new Promise((resolve, reject) => {
-      writer.on('finish', () => {
-        downloadBars.done(postId, {
+      let isResolved = false;
+      let isRejected = false;
+
+      // Helper to safely cleanup and reject
+      const safeReject = async (err: Error, errorMessage: string) => {
+        if (isResolved || isRejected) return;
+        isRejected = true;
+        
+        streamError = err;
+        
+        // Unpipe before destroying to prevent "write after destroy" errors
+        try {
+          response.data.unpipe(writer);
+        } catch (unpipeError) {
+          // Ignore unpipe errors
+        }
+        
+        // Destroy writer safely
+        try {
+          if (!writer.destroyed) {
+            writer.destroy();
+          }
+        } catch (destroyError) {
+          // Ignore destroy errors
+        }
+        
+        // Clean up incomplete temp file
+        try {
+          if (await fs.pathExists(tempPath)) {
+            await fs.remove(tempPath);
+          }
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+        
+        await recordFailure(filePath, fileName);
+        safeUpdateTask(postId, {
+          message: errorMessage,
+          barTransformFn: chalk.red,
+        });
+        reject(err);
+      };
+
+      // Track bytes downloaded
+      response.data.on('data', (chunk: Buffer) => {
+        downloadedBytes += chunk.length;
+      });
+
+      // Handle response stream errors
+      response.data.on('error', async (err: Error) => {
+        await safeReject(err, `Connection error: ${err.message}`);
+      });
+
+      // Check if stream ended properly
+      response.data.on('end', () => {
+        streamEnded = true;
+      });
+
+      response.data.pipe(writer);
+      
+      writer.on('finish', async () => {
+        if (isResolved || isRejected) return;
+        
+        // Verify the download completed successfully
+        if (streamError) {
+          return; // Error already handled
+        }
+
+        // Check if stream ended properly
+        if (!streamEnded) {
+          // Stream didn't end properly, file is likely incomplete
+          await safeReject(
+            new Error('Download stream ended prematurely'),
+            'Download stream ended prematurely'
+          );
+          return;
+        }
+
+        // Verify file size matches expected size if available
+        if (expectedSize !== null) {
+          try {
+            const stats = await fs.stat(tempPath);
+            if (stats.size !== expectedSize) {
+              // File size mismatch, incomplete download
+              await safeReject(
+                new Error(`Download incomplete: expected ${expectedSize} bytes, got ${stats.size}`),
+                `Download incomplete: expected ${expectedSize} bytes, got ${stats.size}`
+              );
+              return;
+            }
+          } catch (statError) {
+            // Can't verify, but assume it's OK
+          }
+        }
+
+        if (isResolved || isRejected) return;
+        isResolved = true;
+
+        // Rename temp file to final destination
+        try {
+          await fs.rename(tempPath, outputPath);
+        } catch (renameError) {
+          // If rename fails, try copy + delete
+          try {
+            await fs.copy(tempPath, outputPath);
+            await fs.remove(tempPath);
+          } catch (copyError) {
+            await safeReject(
+              copyError instanceof Error ? copyError : new Error(String(copyError)),
+              `Failed to save file: ${copyError}`
+            );
+            return;
+          }
+        }
+
+        safeDoneTask(postId, {
           message: `Downloaded as ${outputPath}`,
           barTransformFn: chalk.green,
         });
         setTimeout(() => {
-          downloadBars.removeTask(postId);
+          try {
+            downloadBars.removeTask(postId);
+          } catch (error) {
+            // Task already removed, ignore
+          }
         }, 2000);
         resolve();
       });
+      
       writer.on('error', async (err) => {
-        // Record failure for file system errors
-        await recordFailure(filePath, fileName);
-        reject(err);
+        // Ignore errors if writer was destroyed by us (streamError is set)
+        if (streamError) {
+          return; // Already handled
+        }
+        
+        // Check if it's a "write after destroy" error - this is expected when connection fails
+        if (err.message.includes('write after a stream was destroyed') || 
+            err.message.includes('Cannot call write after a stream was destroyed')) {
+          // This is a side effect of connection failure, ignore it
+          return;
+        }
+        
+        await safeReject(err, `Write error: ${err.message}`);
       });
     });
   } catch (error) {
+    // Clean up incomplete temp file if it exists
+    const tempPathCleanup = getTempPath(outputPath);
+    try {
+      if (await fs.pathExists(tempPathCleanup)) {
+        await fs.remove(tempPathCleanup);
+      }
+    } catch (cleanupError) {
+      // Ignore cleanup errors
+    }
+
     if (isAxiosError(error)) {
       const status = error.response?.status;
+      const errorCode = (error as any).code;
+      
+      // Handle connection errors (ECONNRESET, ECONNABORTED, ETIMEDOUT)
+      if (errorCode === 'ECONNRESET' || errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT') {
+        await recordFailure(filePath, fileName);
+        safeUpdateTask(postId, {
+          message: `Connection error (${errorCode}). ${retries < MAX_DOWNLOAD_RETRIES ? 'Retrying...' : 'Failed'}`,
+          barTransformFn: chalk.red,
+        });
+        
+        if (retries < MAX_DOWNLOAD_RETRIES) {
+          // Try next CDN subdomain if available
+          if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
+            return downloadFile(downloadQueueEntry, retries, cdnSubdomainIndex + 1);
+          }
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
+          return downloadFile(downloadQueueEntry, retries + 1, 0);
+        } else {
+          // Exceeded max retries
+          throw error;
+        }
+      }
       
       // Handle 500 Internal Server Error - immediately blacklist and abort
       if (status === 500) {
         await addToBlacklist(filePath, fileName);
-        downloadBars.done(postId, {
+        safeDoneTask(postId, {
           message: `Blacklisted (500 error): ${fileName}`,
           barTransformFn: chalk.red,
         });
         setTimeout(() => {
-          downloadBars.removeTask(postId);
+          try {
+            downloadBars.removeTask(postId);
+          } catch (e) {
+            // Task already removed, ignore
+          }
         }, 2000);
         return; // Abort, don't retry
       }
       
       // Try next CDN subdomain if available
       if (cdnSubdomainIndex < SUBDOMAINS.length - 1) {
-        downloadBars.updateTask(postId, {
+        safeUpdateTask(postId, {
           message: `Trying next CDN host...`,
           barTransformFn: chalk.yellow,
         });
         return downloadFile(downloadQueueEntry, retries, cdnSubdomainIndex + 1);
       }
 
-      downloadBars.updateTask(postId, {
+      safeUpdateTask(postId, {
         message: `Error: ${status || 'Unknown'} - ${error.response?.statusText || 'Unknown'}. Retrying...`,
         barTransformFn: chalk.red,
       });
-      downloadBars.restartTask(postId, {
-        barTransformFn: chalk.blue,
-      });
+      try {
+        downloadBars.restartTask(postId, {
+          barTransformFn: chalk.blue,
+        });
+      } catch (e) {
+        // Task doesn't exist, ignore
+      }
       if (retries < MAX_DOWNLOAD_RETRIES) {
         // Wait before retrying
         await new Promise(resolve => setTimeout(resolve, DOWNLOAD_RETRY_WAIT_SECONDS));
@@ -482,6 +697,10 @@ async function downloadFile(downloadQueueEntry: DownloadQueueEntry, retries = 0,
     } else {
       // Non-Axios error (e.g., file system error)
       await recordFailure(filePath, fileName);
+      safeUpdateTask(postId, {
+        message: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        barTransformFn: chalk.red,
+      });
       throw error;
     }
   }
@@ -504,8 +723,8 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
         console.error(`Failed to download ${downloadTask.fileName}:`, error);
         // Record failure (this will also check if we should blacklist)
         await recordFailure(downloadTask.filePath, downloadTask.fileName);
-        downloadBars.updateTask(downloadTask.postId, {
-          message: `Error: ${error}`,
+        safeUpdateTask(downloadTask.postId, {
+          message: `Error: ${error instanceof Error ? error.message : String(error)}`,
           barTransformFn: chalk.red,
         });
       }));
@@ -519,6 +738,32 @@ async function downloadFiles(downloadQueue: DownloadQueueEntry[]) {
 
 function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[\/\\\?%*:|"<>]/g, '_');
+}
+
+// Get temp file path for downloading
+function getTempPath(filePath: string): string {
+  return filePath + '.downloading';
+}
+
+// Clean up leftover temp files from previous failed downloads
+async function cleanupTempFiles(directory: string): Promise<number> {
+  let cleanedCount = 0;
+  try {
+    const files = await fs.readdir(directory);
+    for (const file of files) {
+      if (file.endsWith('.downloading')) {
+        try {
+          await fs.remove(path.join(directory, file));
+          cleanedCount++;
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+    }
+  } catch (e) {
+    // Directory might not exist yet, ignore
+  }
+  return cleanedCount;
 }
 
 // Check if file exists, including compressed versions (jxl for images, av1 for videos)
@@ -555,6 +800,12 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
     const posts: Post[] = [];
 
     await fs.ensureDir(OUTPUT_DIR);
+    
+    // Clean up any leftover temp files from previous failed downloads
+    const cleanedTempFiles = await cleanupTempFiles(OUTPUT_DIR);
+    if (cleanedTempFiles > 0) {
+      console.log(chalk.yellow(`Cleaned up ${cleanedTempFiles} incomplete download(s) from previous run`));
+    }
     
     // Load blacklist on startup
     await loadBlacklist();
