@@ -5,6 +5,17 @@
 host: kemono.cr          # Options: kemono.cr, coomer.st, kemono.su (legacy), coomer.su (legacy)
 outputDir: downloads-%username%  # %username% is replaced with userId
 maxPosts: 5000           # Maximum posts to fetch (0 = unlimited)
+proxyRotation: round_robin # Proxy selection strategy (currently round_robin)
+# Optional proxy list (leave empty to disable proxying)
+proxies:
+  # - type: http        # Options: http, https, socks5
+  #   host: proxy.example.com
+  #   port: 8080
+  #   username: myuser  # Optional
+  #   password: secret  # Optional
+  # - type: socks5
+  #   host: socks.example.com
+  #   port: 1080
 
 # List of creators to scrape
 creators:

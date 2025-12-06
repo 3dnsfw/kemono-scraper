@@ -7,6 +7,7 @@ Download all media from Kemono and Coomer. Scrapes posts from a given service an
 - Scrapes posts from various services (Patreon, OnlyFans, Fansly, etc.)
 - Downloads attachments while checking for existing files
 - Supports multiple hosts and CDN failover
+- Proxy pool with round-robin rotation and cooldowns
 - Progress bars with percentage and ETA
 - Blacklist system for permanently failed downloads
 - **Standalone executables** — no runtime required
@@ -108,6 +109,16 @@ bun start --config config.yaml
 host: kemono.cr
 outputDir: downloads-%username%
 maxPosts: 5000
+proxyRotation: round_robin
+proxies:
+  # - type: http        # Options: http, https, socks5
+  #   host: proxy.example.com
+  #   port: 8080
+  #   username: user    # Optional
+  #   password: pass    # Optional
+  # - type: socks5
+  #   host: socks.example.com
+  #   port: 1080
 
 # Creators to scrape
 creators:
@@ -128,6 +139,13 @@ creators:
 ```
 
 See `config.example.yaml` for a full example with all options.
+
+### Proxy configuration
+
+- Add proxies under `proxies` in your config. Supported `type` values: `http`, `https`, `socks5`.
+- Rotation is round-robin; unhealthy proxies are cooled down for a short period on connection/auth errors.
+- Leave `proxies` empty to disable proxying; the scraper falls back to direct connections automatically.
+- Enable verbose proxy logs with `DEBUG_PROXY=1 bun start --config config.yaml`.
 
 ## Building Executables
 

@@ -7,6 +7,7 @@ import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
 import { AsyncQueue } from "@tanuel/async-queue";
 import yaml from 'js-yaml';
+import { ProxyManager, ProxyConfig, ProxyRotation, ProxySelection } from './proxyManager.js';
 
 // Catch unhandled promise rejections to prevent silent exits
 process.on('unhandledRejection', (reason, promise) => {
@@ -73,6 +74,8 @@ interface DownloadQueueEntry {
 type ServiceType = 'patreon' | 'fanbox' | 'discord' | 'fantia' | 'afdian' | 'boosty' | 'gumroad' | 'subscribestar' | 'onlyfans' | 'fansly' | 'candfans';
 type HostType = 'kemono.su' | 'coomer.su' | 'kemono.cr' | 'coomer.st';
 
+type ProxyRotationMode = ProxyRotation;
+
 // Config file structure
 interface CreatorConfig {
   service: ServiceType;
@@ -87,6 +90,8 @@ interface Config {
   host?: HostType;
   outputDir?: string;
   maxPosts?: number;
+  proxies?: ProxyConfig[];
+  proxyRotation?: ProxyRotationMode;
   // List of creators to scrape
   creators: CreatorConfig[];
 }
@@ -102,6 +107,31 @@ async function loadConfig(configPath: string): Promise<Config> {
   
   if (!config.creators || !Array.isArray(config.creators) || config.creators.length === 0) {
     throw new Error('Config file must contain a "creators" array with at least one creator');
+  }
+
+  // Normalize and validate proxy configuration
+  config.proxies = Array.isArray(config.proxies) ? config.proxies : [];
+  config.proxyRotation = config.proxyRotation || 'round_robin';
+
+  for (const proxy of config.proxies) {
+    if (!proxy || typeof proxy !== 'object') {
+      throw new Error('Each proxy entry must be an object');
+    }
+    if (!['http', 'https', 'socks5'].includes(proxy.type as string)) {
+      throw new Error('Proxy "type" must be one of: http, https, socks5');
+    }
+    if (!proxy.host || typeof proxy.host !== 'string') {
+      throw new Error('Proxy "host" is required and must be a string');
+    }
+    if (typeof proxy.port !== 'number' || proxy.port <= 0) {
+      throw new Error('Proxy "port" is required and must be a positive number');
+    }
+    if (proxy.username && typeof proxy.username !== 'string') {
+      throw new Error('Proxy "username" must be a string when provided');
+    }
+    if (proxy.password && typeof proxy.password !== 'string') {
+      throw new Error('Proxy "password" must be a string when provided');
+    }
   }
   
   // Validate each creator
@@ -196,6 +226,9 @@ const API_HEADERS = {
   'Accept-Encoding': 'gzip, deflate'
 };
 
+const PROXY_DEBUG = process.env.DEBUG_PROXY === '1';
+const PROXY_FAILURE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH']);
+
 // Blacklist and failure tracking
 interface BlacklistEntry {
   filePath: string;
@@ -215,6 +248,8 @@ interface ScraperContext {
   subdomains: string[];
   blacklistFile: string;
   workingApiHost: string | null;
+  proxyManager: ProxyManager | null;
+  proxyWarningIssued?: boolean;
   blacklist: Set<string>;
   failureCounts: Map<string, number>;
   fileNames: Map<string, string>;
@@ -242,7 +277,8 @@ function createScraperContext(
   host: HostType,
   outputDir: string,
   maxPosts: number,
-  downloadBars: MultiProgressBars
+  downloadBars: MultiProgressBars,
+  proxyManager: ProxyManager | null
 ): ScraperContext {
   const { baseDomain, subdomains } = getDomainConfig(host);
   const resolvedOutputDir = outputDir.replace('%username%', userId);
@@ -257,6 +293,8 @@ function createScraperContext(
     subdomains,
     blacklistFile: path.join(resolvedOutputDir, 'blacklist.json'),
     workingApiHost: null,
+    proxyManager,
+    proxyWarningIssued: false,
     blacklist: new Set(),
     failureCounts: new Map(),
     fileNames: new Map(),
@@ -264,6 +302,62 @@ function createScraperContext(
     downloadBars,
     overallProgressBarId: `${service}/${userId} Progress`,
   };
+}
+
+function shouldCooldownProxy(error: unknown): boolean {
+  if (!error) return false;
+  if (!isAxiosError(error)) return true;
+  if (!error.response) {
+    const code = (error as any).code;
+    return typeof code === 'string' && PROXY_FAILURE_CODES.has(code);
+  }
+  if (error.response?.status === 407) {
+    return true; // Proxy auth required
+  }
+  return false;
+}
+
+function buildProxyAxiosOptions(ctx: ScraperContext, url: string): { selection: ProxySelection | null; options: Record<string, unknown> } {
+  if (!ctx.proxyManager || ctx.proxyManager.size === 0) {
+    return { selection: null, options: {} };
+  }
+
+  const selection = ctx.proxyManager.getNextProxy(url);
+  if (!selection) {
+    if (!ctx.proxyWarningIssued) {
+      const availability = ctx.proxyManager.getAvailability();
+      console.log(chalk.yellow(`[proxy] No healthy proxies available (${availability.available}/${availability.total}); falling back to direct connection.`));
+      ctx.proxyWarningIssued = true;
+    }
+    return { selection: null, options: {} };
+  }
+
+  ctx.proxyWarningIssued = false;
+
+  if (PROXY_DEBUG) {
+    console.log(chalk.gray(`[proxy] Using ${selection.label} for ${url}`));
+  }
+
+  return {
+    selection,
+    options: {
+      httpAgent: selection.httpAgent,
+      httpsAgent: selection.httpsAgent,
+      proxy: false,
+    },
+  };
+}
+
+function recordProxyOutcome(ctx: ScraperContext, selection: ProxySelection | null, error?: unknown): void {
+  if (!selection || !ctx.proxyManager) {
+    return;
+  }
+
+  if (error && shouldCooldownProxy(error)) {
+    ctx.proxyManager.reportFailure(selection.id);
+  } else if (!error) {
+    ctx.proxyManager.reportSuccess(selection.id);
+  }
 }
 
 // Load blacklist from JSON file
@@ -393,11 +487,14 @@ async function findWorkingApiHost(ctx: ScraperContext): Promise<string> {
   const maxRetries = 3;
   
   while (retries <= maxRetries) {
+    const { selection, options } = buildProxyAxiosOptions(ctx, testUrl);
     try {
       const response = await axios.get(testUrl, { 
         timeout: 20000,
-        headers: API_HEADERS
+        headers: API_HEADERS,
+        ...options,
       });
+      recordProxyOutcome(ctx, selection);
       // Accept 200 with posts array in response.data.posts
       if (response.status === 200 && response.data && typeof response.data === 'object') {
         if (Array.isArray(response.data.posts) || Array.isArray(response.data)) {
@@ -407,6 +504,7 @@ async function findWorkingApiHost(ctx: ScraperContext): Promise<string> {
         }
       }
     } catch (error) {
+      recordProxyOutcome(ctx, selection, error);
       if (isAxiosError(error)) {
         const status = error.response?.status;
         const statusText = error.response?.statusText;
@@ -446,11 +544,15 @@ async function fetchPosts(ctx: ScraperContext, offset: number = 0, retries = 0):
     console.log(chalk.blue(`Fetching posts (offset: ${offset})...`));
   }
   
+  const { selection, options } = buildProxyAxiosOptions(ctx, url);
+
   try {
     const response = await axios.get(url, { 
       headers: API_HEADERS,
-      timeout: 30000
+      timeout: 30000,
+      ...options,
     });
+    recordProxyOutcome(ctx, selection);
     
     // Response format: array of posts directly
     const posts = Array.isArray(response.data) ? response.data : (response.data.posts || []);
@@ -465,6 +567,7 @@ async function fetchPosts(ctx: ScraperContext, offset: number = 0, retries = 0):
     
     return { posts, hasMore };
   } catch (error) {
+    recordProxyOutcome(ctx, selection, error);
     if (isAxiosError(error)) {
       const status = error.response?.status;
       const statusText = error.response?.statusText;
@@ -527,6 +630,8 @@ async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQue
     message: 'Starting...',
     barTransformFn: chalk.blue,
   });
+  let proxySelection: ProxySelection | null = null;
+  let proxyOptions: Record<string, unknown> = {};
   try {
     if (await fileExistsOrCompressed(outputPath)) {
       safeDoneTask(ctx, taskId, {
@@ -566,9 +671,14 @@ async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQue
       // Ignore cleanup errors
     }
 
+    const proxyResult = buildProxyAxiosOptions(ctx, downloadUrl);
+    proxySelection = proxyResult.selection;
+    proxyOptions = proxyResult.options;
+
     const response = await axios.get(downloadUrl, {
       responseType: 'stream',
       timeout: 120000, // Increased timeout to 2 minutes for large files
+      ...proxyOptions,
       onDownloadProgress: progressEvent => {
         if (progressEvent.total) {
           // can calculate percentage
@@ -584,6 +694,7 @@ async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQue
         }
       },
     });
+    recordProxyOutcome(ctx, proxySelection);
 
     // Check for 500 errors before processing the stream
     if (response.status === 500) {
@@ -786,6 +897,7 @@ async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQue
 
     return Promise.race([streamPromise, timeoutPromise]);
   } catch (error) {
+    recordProxyOutcome(ctx, proxySelection, error);
     // Clean up incomplete temp file if it exists
     const tempPathCleanup = getTempPath(outputPath);
     try {
@@ -1200,6 +1312,17 @@ async function scrapeCreator(ctx: ScraperContext): Promise<void> {
       // Load config file
       const config = await loadConfig(argv.config);
       console.log(chalk.cyan(`Loaded config with ${config.creators.length} creator(s)`));
+    const proxyManager = (config.proxies && config.proxies.length > 0)
+      ? new ProxyManager(config.proxies, config.proxyRotation)
+      : null;
+    if (proxyManager) {
+      const availability = proxyManager.getAvailability();
+      if (!proxyManager.hasAvailableProxy()) {
+        console.log(chalk.yellow(`[proxy] Loaded ${availability.total} proxies but none are currently available; continuing without proxies until they recover.`));
+      } else {
+        console.log(chalk.cyan(`[proxy] Loaded ${availability.total} proxy/proxies with ${availability.available} available (rotation: ${config.proxyRotation || 'round_robin'})`));
+      }
+    }
       
       // Process each creator
       for (let i = 0; i < config.creators.length; i++) {
@@ -1217,7 +1340,7 @@ async function scrapeCreator(ctx: ScraperContext): Promise<void> {
         console.log(chalk.magenta(`[${creatorNum}/${config.creators.length}] Scraping ${service}/${userId}`));
         console.log(chalk.magenta(`${'='.repeat(60)}\n`));
         
-        const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars);
+      const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars, proxyManager);
         
         try {
           await scrapeCreator(ctx);
@@ -1243,8 +1366,9 @@ async function scrapeCreator(ctx: ScraperContext): Promise<void> {
       const host = argv.host as HostType;
       const outputDir = argv.outputDir;
       const maxPosts = argv.maxPosts;
+    const proxyManager = null;
       
-      const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars);
+    const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars, proxyManager);
       await scrapeCreator(ctx);
     }
     
