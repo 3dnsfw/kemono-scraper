@@ -51,7 +51,7 @@ export async function runCompression(options: CompressOptions = {}): Promise<Com
 
   const stats: CompressionStats = emptyStats();
   console.log(chalk.cyan('============================================'));
-  console.log(chalk.cyan('  Media Compression (TypeScript)'));
+  console.log(chalk.cyan('  Media Compression  '));
   console.log(chalk.cyan('============================================'));
   console.log(`JPEG XL Quality: ${config.jpegXlQuality}, Effort: ${config.jpegXlEffort}`);
   console.log(`AV1 CRF: ${config.av1Crf}, Preset: ${config.av1Preset}`);
@@ -68,8 +68,8 @@ export async function runCompression(options: CompressOptions = {}): Promise<Com
     console.log(chalk.gray('No JPEG images found.'));
   } else {
     console.log(chalk.blue(`[INFO] Found ${imageFiles.length} JPEG image(s)`));
-    for (let i = 0; i < imageFiles.length; i++) {
-      const file = imageFiles[i];
+    for (const element of imageFiles) {
+      const file = element;
       const success = await compressImage(file, config, tools, stats);
       if (!success) {
         stats.errors += 1;
