@@ -29,33 +29,33 @@ export default defineConfig({
 				{
 					tag: 'script',
 					content: `
-						(function() {
-							// Skip if reduced motion is preferred
+						document.addEventListener('DOMContentLoaded', () => {
 							if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 							
-							// Create overlay element
 							const overlay = document.createElement('div');
 							overlay.className = 'theme-transition-overlay';
-							document.documentElement.appendChild(overlay);
+							document.body.appendChild(overlay);
 							
-							// Watch for theme changes on <html> data-theme attribute
-							const observer = new MutationObserver((mutations) => {
-								for (const mutation of mutations) {
-									if (mutation.attributeName === 'data-theme') {
-										// Update overlay background to match new theme
-										overlay.style.background = getComputedStyle(document.documentElement).getPropertyValue('--sl-color-bg');
-										// Trigger animation
-										overlay.classList.remove('active');
-										void overlay.offsetWidth; // Force reflow
-										overlay.classList.add('active');
-										// Clean up after animation
-										setTimeout(() => overlay.classList.remove('active'), 400);
-									}
-								}
-							});
+							// Define theme colors
+							const colors = { light: '#fff', dark: '#0f0f14' };
 							
-							observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-						})();
+							// Intercept theme toggle clicks
+							document.addEventListener('click', (e) => {
+								const btn = e.target.closest('starlight-theme-select button, [data-theme-toggle]');
+								if (!btn) return;
+								
+								const current = document.documentElement.dataset.theme || 'light';
+								const next = current === 'dark' ? 'light' : 'dark';
+								
+								// Set overlay to the NEXT theme color
+								overlay.style.background = colors[next];
+								overlay.classList.remove('expanding');
+								void overlay.offsetWidth;
+								overlay.classList.add('expanding');
+								
+								setTimeout(() => overlay.classList.remove('expanding'), 400);
+							}, true);
+						});
 					`,
 				},
 				{
