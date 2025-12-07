@@ -17,6 +17,15 @@ Download all media from Kemono and Coomer. Scrapes posts from a given service an
 
 📖 **[View the full documentation](https://3dnsfw.github.io/Kemono-Scraper/)**
 
+
+## Donate
+
+<div align="">
+    <a href="https://coindrop.to/nsfw3d" target="_blank">
+        <img src="https://coindrop.to/embed-button.png" alt="Coindrop.to me" style="border-radius: 10px; !important; height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" />
+    </a>
+</div>
+
 ## License
 
 [MIT](./LICENSE)
