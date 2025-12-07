@@ -50,6 +50,7 @@ interface Post {
     | 'boosty'
     | 'gumroad'
     | 'subscribestar'
+    | 'dlsite'
     | 'onlyfans'
     | 'fansly'
     | 'candfans';
@@ -71,7 +72,7 @@ interface DownloadQueueEntry {
   taskId: string; // Unique ID for progress bar task (prevents collisions)
 }
 
-type ServiceType = 'patreon' | 'fanbox' | 'discord' | 'fantia' | 'afdian' | 'boosty' | 'gumroad' | 'subscribestar' | 'onlyfans' | 'fansly' | 'candfans';
+type ServiceType = 'patreon' | 'fanbox' | 'discord' | 'fantia' | 'afdian' | 'boosty' | 'gumroad' | 'subscribestar' | 'dlsite' | 'onlyfans' | 'fansly' | 'candfans';
 type HostType = 'kemono.su' | 'coomer.su' | 'kemono.cr' | 'coomer.st';
 
 type ProxyRotationMode = ProxyRotation;
@@ -166,6 +167,7 @@ const argv = yargs(hideBin(process.argv))
       'boosty',
       'gumroad',
       'subscribestar',
+      'dlsite',
       'onlyfans',
       'fansly',
       'candfans',

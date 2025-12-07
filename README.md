@@ -64,7 +64,7 @@ bun start -s patreon -u 30037948
 
 \* Either `--config` OR both `--service` and `--userId` must be provided.
 
-**Supported services:** `patreon`, `fanbox`, `discord`, `fantia`, `afdian`, `boosty`, `gumroad`, `subscribestar`, `onlyfans`, `fansly`, `candfans`
+**Supported services:** `patreon`, `fanbox`, `discord`, `fantia`, `afdian`, `boosty`, `gumroad`, `subscribestar`, `dlsite`, `onlyfans`, `fansly`, `candfans`
 
 **Supported hosts:** `kemono.cr`, `coomer.st`, `kemono.su`, `coomer.su`
 
