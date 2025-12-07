@@ -139,6 +139,6 @@ This makes it easy to check for new content regularly!
 
 ## Next Steps
 
-- Download from [multiple creators at once](/kemono-scraper/usage/config-file/)
-- See [all command line options](/kemono-scraper/usage/cli-options/)
-- Set up [proxies](/kemono-scraper/usage/proxy/) if needed
+- Download from [multiple creators at once](/Kemono-Scraper/usage/config-file/)
+- See [all command line options](/Kemono-Scraper/usage/cli-options/)
+- Set up [proxies](/Kemono-Scraper/usage/proxy/) if needed

@@ -10,7 +10,7 @@ Let's download some content! This guide will walk you through your first downloa
 ## Before You Start
 
 Make sure you have:
-- Kemono Scraper [installed](/kemono-scraper/getting-started/installation/)
+- Kemono Scraper [installed](/Kemono-Scraper/getting-started/installation/)
 - The **creator's username or ID** from Kemono or Coomer
 - The **service name** (like `patreon`, `onlyfans`, etc.)
 
@@ -97,7 +97,7 @@ You can run the same command again anytime. The scraper will skip files you alre
 ## Common Issues
 
 ### "Permission denied" on Mac/Linux
-Make sure you ran `chmod +x` on the file first. See the [installation guide](/kemono-scraper/getting-started/installation/).
+Make sure you ran `chmod +x` on the file first. See the [installation guide](/Kemono-Scraper/getting-started/installation/).
 
 ### "No posts found"
 - Double-check the service name and user ID
@@ -108,6 +108,6 @@ This is normal - the sites have rate limits. Let it run, it will finish!
 
 ## Next Steps
 
-- Learn about [configuration files](/kemono-scraper/usage/config-file/) to download from multiple creators
-- Check out [all command line options](/kemono-scraper/usage/cli-options/)
-- Set up [proxies](/kemono-scraper/usage/proxy/) if you have connection issues
+- Learn about [configuration files](/Kemono-Scraper/usage/config-file/) to download from multiple creators
+- Check out [all command line options](/Kemono-Scraper/usage/cli-options/)
+- Set up [proxies](/Kemono-Scraper/usage/proxy/) if you have connection issues

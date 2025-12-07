@@ -142,7 +142,7 @@ Double-check your command and try again.
 
 ### How do I download from multiple creators?
 
-Create a config file! See the [Configuration File guide](/kemono-scraper/usage/config-file/).
+Create a config file! See the [Configuration File guide](/Kemono-Scraper/usage/config-file/).
 
 ```yaml
 creators:

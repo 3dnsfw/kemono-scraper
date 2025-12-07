@@ -239,5 +239,5 @@ creators:
 
 ## Next Steps
 
-- Learn about [proxy setup](/kemono-scraper/usage/proxy/) for better reliability
-- See all [command line options](/kemono-scraper/usage/cli-options/)
+- Learn about [proxy setup](/Kemono-Scraper/usage/proxy/) for better reliability
+- See all [command line options](/Kemono-Scraper/usage/cli-options/)

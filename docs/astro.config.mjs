@@ -16,7 +16,7 @@ export default defineConfig({
 				{
 					icon: 'github',
 					label: 'GitHub',
-					href: 'https://github.com/3dnsfw/kemono-scraper',
+					href: 'https://github.com/3dnsfw/Kemono-Scraper',
 				},
 			],
 			customCss: ['./src/styles/custom.css'],
