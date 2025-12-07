@@ -91,6 +91,7 @@ interface Config {
   host?: HostType;
   outputDir?: string;
   maxPosts?: number;
+  maxConcurrentDownloads?: number;
   proxies?: ProxyConfig[];
   proxyRotation?: ProxyRotationMode;
   // List of creators to scrape
@@ -113,6 +114,15 @@ async function loadConfig(configPath: string): Promise<Config> {
   // Normalize and validate proxy configuration
   config.proxies = Array.isArray(config.proxies) ? config.proxies : [];
   config.proxyRotation = config.proxyRotation || 'round_robin';
+  
+  // Validate maxConcurrentDownloads if provided
+  if (config.maxConcurrentDownloads !== undefined) {
+    if (typeof config.maxConcurrentDownloads !== 'number' || 
+        config.maxConcurrentDownloads < 1 || 
+        config.maxConcurrentDownloads > 10) {
+      throw new Error('maxConcurrentDownloads must be a number between 1 and 10');
+    }
+  }
 
   for (const proxy of config.proxies) {
     if (!proxy || typeof proxy !== 'object') {
@@ -200,10 +210,20 @@ const argv = yargs(hideBin(process.argv))
     description: 'Maximum number of posts to fetch (0 = unlimited, default: 5000)',
     default: 5000,
   })
+  .option('maxConcurrentDownloads', {
+    alias: 'd',
+    type: 'number',
+    description: 'Maximum concurrent downloads (1-10, default: 2)',
+    default: 2,
+  })
   .check((argv) => {
     // Either config file or service+userId must be provided
     if (!argv.config && (!argv.service || !argv.userId)) {
       throw new Error('Either --config or both --service and --userId must be provided');
+    }
+    // Validate maxConcurrentDownloads range
+    if (argv.maxConcurrentDownloads < 1 || argv.maxConcurrentDownloads > 10) {
+      throw new Error('maxConcurrentDownloads must be between 1 and 10');
     }
     return true;
   })
@@ -215,7 +235,6 @@ const argv = yargs(hideBin(process.argv))
 
 // Constants
 const PAGE_SIZE = 50;
-const MAX_CONCURRENT_DOWNLOADS = 2;
 const MAX_DOWNLOAD_RETRIES = 3;
 const DOWNLOAD_RETRY_WAIT_SECONDS = 10000;
 const REQUEST_TIMEOUT_MS = 120000; // Abort the HTTP request itself if it never responds
@@ -247,6 +266,7 @@ interface ScraperContext {
   host: HostType;
   outputDir: string;
   maxPosts: number;
+  maxConcurrentDownloads: number;
   baseDomain: string;
   subdomains: string[];
   blacklistFile: string;
@@ -280,6 +300,7 @@ function createScraperContext(
   host: HostType,
   outputDir: string,
   maxPosts: number,
+  maxConcurrentDownloads: number,
   downloadBars: MultiProgressBars,
   proxyManager: ProxyManager | null
 ): ScraperContext {
@@ -292,6 +313,7 @@ function createScraperContext(
     host,
     outputDir: resolvedOutputDir,
     maxPosts,
+    maxConcurrentDownloads,
     baseDomain,
     subdomains,
     blacklistFile: path.join(resolvedOutputDir, 'blacklist.json'),
@@ -1025,7 +1047,7 @@ interface DownloadResult {
 }
 
 async function downloadFiles(ctx: ScraperContext, downloadQueue: DownloadQueueEntry[], totalFiles: number, completedSoFar: number): Promise<DownloadResult> {
-  const queue = new AsyncQueue({ limit: MAX_CONCURRENT_DOWNLOADS });
+  const queue = new AsyncQueue({ limit: ctx.maxConcurrentDownloads });
   const failedDownloads: DownloadQueueEntry[] = [];
   
   return new Promise<DownloadResult>((resolve, reject) => {
@@ -1376,12 +1398,13 @@ async function scrapeCreator(ctx: ScraperContext): Promise<void> {
         const host = creator.host || config.host || (argv.host as HostType);
         const outputDir = creator.outputDir || config.outputDir || argv.outputDir;
         const maxPosts = creator.maxPosts ?? config.maxPosts ?? argv.maxPosts;
+        const maxConcurrentDownloads = config.maxConcurrentDownloads ?? argv.maxConcurrentDownloads ?? 2;
         
         console.log(chalk.magenta(`\n${'='.repeat(60)}`));
         console.log(chalk.magenta(`[${creatorNum}/${config.creators.length}] Scraping ${service}/${userId}`));
         console.log(chalk.magenta(`${'='.repeat(60)}\n`));
         
-      const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars, proxyManager);
+      const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, maxConcurrentDownloads, downloadBars, proxyManager);
         
         try {
           await scrapeCreator(ctx);
@@ -1407,9 +1430,10 @@ async function scrapeCreator(ctx: ScraperContext): Promise<void> {
       const host = argv.host as HostType;
       const outputDir = argv.outputDir;
       const maxPosts = argv.maxPosts;
+      const maxConcurrentDownloads = argv.maxConcurrentDownloads ?? 2;
     const proxyManager = null;
       
-    const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, downloadBars, proxyManager);
+    const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, maxConcurrentDownloads, downloadBars, proxyManager);
       await scrapeCreator(ctx);
     }
     
