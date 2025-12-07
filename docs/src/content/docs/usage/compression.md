@@ -99,7 +99,7 @@ This scans all `downloads-*` folders in the current directory and compresses eli
 If you are running from source instead of a packaged binary:
 
 ```bash
-bun run index.ts compress
+bun run compress
 ```
 
 ## Configuration
