@@ -36,25 +36,19 @@ export default defineConfig({
 							overlay.className = 'theme-transition-overlay';
 							document.body.appendChild(overlay);
 							
-							// Define theme colors
 							const colors = { light: '#fff', dark: '#0f0f14' };
 							
-							// Intercept theme toggle clicks
-							document.addEventListener('click', (e) => {
-								const btn = e.target.closest('starlight-theme-select button, [data-theme-toggle]');
-								if (!btn) return;
+							new MutationObserver((mutations) => {
+								const newTheme = document.documentElement.dataset.theme;
+								if (!newTheme) return;
 								
-								const current = document.documentElement.dataset.theme || 'light';
-								const next = current === 'dark' ? 'light' : 'dark';
-								
-								// Set overlay to the NEXT theme color
-								overlay.style.background = colors[next];
+								overlay.style.background = colors[newTheme];
 								overlay.classList.remove('expanding');
 								void overlay.offsetWidth;
 								overlay.classList.add('expanding');
 								
 								setTimeout(() => overlay.classList.remove('expanding'), 400);
-							}, true);
+							}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 						});
 					`,
 				},
