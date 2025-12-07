@@ -9,7 +9,7 @@ import type {
   ScraperContext,
   ServiceType,
 } from './types';
-import type { ProxyManager } from '../proxyManager';
+import type { ProxyManager } from './proxyManager';
 
 export function getDomainConfig(host: HostType): { baseDomain: string; subdomains: string[] } {
   const isLegacy = host.includes('.su');

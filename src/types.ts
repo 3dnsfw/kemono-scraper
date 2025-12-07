@@ -4,7 +4,7 @@ import type {
   ProxyManager,
   ProxyRotation,
   ProxySelection,
-} from '../proxyManager';
+} from './proxyManager';
 
 export interface File {
   name: string;

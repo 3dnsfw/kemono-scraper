@@ -1,6 +1,6 @@
 import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
-import { ProxyManager } from './proxyManager';
+import { ProxyManager } from './src/proxyManager';
 import { parseCliArgs } from './src/cli';
 import { loadConfig } from './src/config';
 import { createScraperContext } from './src/context';

@@ -125,10 +125,8 @@ export class ProxyManager {
         continue;
       }
 
-      // Round-robin: move pointer past chosen entry
       this.currentIndex = (index + 1) % this.entries.length;
 
-      // Return cached agents (axios will pick httpAgent/httpsAgent based on URL protocol)
       return {
         id: candidate.id,
         label: candidate.label,
