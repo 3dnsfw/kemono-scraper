@@ -243,7 +243,7 @@ Large creators can have hundreds of gigabytes of content. Monitor your disk spac
 
 1. Using `--maxPosts` to limit downloads
 2. Downloading to an external drive
-3. Compressing files after download
+3. [Compressing files after download](/Kemono-Scraper/usage/compression/) to save 30-50% disk space
 
 ---
 
