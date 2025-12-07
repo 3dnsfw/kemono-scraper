@@ -22,21 +22,20 @@ creators:
   # Example Patreon creator
   - service: patreon
     userId: "30037948"
+    outputDir: downloads-diokonigsreuter  # Custom output dir
 
   # Example Fanbox creator
   - service: fanbox
     userId: "3316400"
 
-  # Example with custom output directory
+  # Example with overrides
   - service: fantia
     userId: "83679"
-    outputDir: fantia/%username%  # Custom output dir
-    # Optional overrides:
-    # maxPosts: 100
+    maxPosts: 100  # Limit posts for this creator
 
   # Example from Coomer
   - service: onlyfans
-    userId: "username"
+    userId: "belledelphine"
     host: coomer.st
 
 # Supported services:
