@@ -16,8 +16,15 @@
 	z-index: 9999;
 }
 
+/* Firefox: prevent start flicker by pre-clipping */
+.is-firefox::view-transition-new(root) {
+	clip-path: circle(0px at 100% 0);
+}
+
 @media (prefers-reduced-motion: reduce) {
-	::view-transition-group(*) {
+	::view-transition-group(*),
+	::view-transition-old(*),
+	::view-transition-new(*) {
 		animation: none !important;
 	}
 }

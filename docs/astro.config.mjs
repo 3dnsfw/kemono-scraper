@@ -33,8 +33,8 @@ export default defineConfig({
 							if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 							if (!document.startViewTransition) return;
 							
-							// Find the theme toggle button (starlight-theme-rapide uses a button)
-							const themeBtn = document.querySelector('[data-theme-toggle], .theme-toggle button, header button[class*="theme"]');
+							const isFirefox = navigator.userAgent.includes('Firefox');
+							if (isFirefox) document.documentElement.classList.add('is-firefox');
 							
 							// Intercept clicks on theme toggle area
 							document.addEventListener('click', (e) => {
@@ -62,9 +62,17 @@ export default defineConfig({
 								transition.ready.then(() => {
 									const x = window.innerWidth;
 									const maxRadius = Math.hypot(x, window.innerHeight);
+									const opts = { 
+										duration: 800, 
+										easing: 'cubic-bezier(0.4, 0, 0.6, 1)', 
+										pseudoElement: '::view-transition-new(root)'
+									};
+									// Firefox needs fill:none to avoid end flicker, Chrome needs fill:forwards
+									if (!isFirefox) opts.fill = 'forwards';
+									
 									document.documentElement.animate(
 										{ clipPath: ['circle(0px at ' + x + 'px 0)', 'circle(' + maxRadius + 'px at ' + x + 'px 0)'] },
-										{ duration: 800, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', pseudoElement: '::view-transition-new(root)' }
+										opts
 									);
 								});
 							}, true);
