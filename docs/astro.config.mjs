@@ -25,6 +25,50 @@ export default defineConfig({
 				},
 			],
 			customCss: ['./src/styles/custom.css'],
+			head: [
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image',
+						content: 'https://repository-images.githubusercontent.com/804778787/2ed662f1-6026-4551-bae2-a04f896742ff',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:alt',
+						content: 'Kemono Scraper - Download all media from Kemono and Coomer with ease',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:image',
+						content: 'https://repository-images.githubusercontent.com/804778787/2ed662f1-6026-4551-bae2-a04f896742ff',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:image:alt',
+						content: 'Kemono Scraper - Download all media from Kemono and Coomer with ease',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'author',
+						content: '3dnsfw',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'keywords',
+						content: 'kemono, coomer, scraper, download, media, patreon, onlyfans, fansly, fanbox, fantia',
+					},
+				},
+			],
 			sidebar: [
 				{ label: 'Home', slug: 'index' },
 				{
