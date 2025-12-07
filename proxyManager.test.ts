@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { ProxyConfig, ProxyManager } from './proxyManager.js';
+import { ProxyConfig, ProxyManager } from './proxyManager';
 
 const sampleProxies: ProxyConfig[] = [
   { type: 'http', host: 'proxy-one', port: 8080 },
