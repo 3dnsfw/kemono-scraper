@@ -1,10 +1,11 @@
 import { MultiProgressBars } from 'multi-progress-bars';
 import chalk from 'chalk';
 import { ProxyManager } from './src/proxyManager';
-import { parseCliArgs } from './src/cli';
+import { parseCliArgs, type ScrapeCliArgs } from './src/cli';
 import { loadConfig } from './src/config';
 import { createScraperContext } from './src/context';
 import { scrapeCreator } from './src/scraper';
+import { runCompression } from './src/compression';
 import type { HostType, ServiceType } from './src/types';
 
 // Catch unhandled promise rejections to prevent silent exits
@@ -23,14 +24,27 @@ process.on('uncaughtException', (error) => {
   try {
     const argv = parseCliArgs();
 
+    if (argv.mode === 'compress') {
+      await runCompression({
+        jpegXlQuality: argv.jpegXlQuality,
+        jpegXlEffort: argv.jpegXlEffort,
+        av1Crf: argv.av1Crf,
+        av1Preset: argv.av1Preset,
+        keepOriginals: argv.keepOriginals,
+        dryRun: argv.dryRun,
+      });
+      return;
+    }
+
+    const scrapeArgs = argv as ScrapeCliArgs;
     const downloadBars = new MultiProgressBars({
       initMessage: 'Downloads',
       anchor: 'bottom',
       persist: true,
     });
 
-    if (argv.config) {
-      const config = await loadConfig(argv.config);
+    if (scrapeArgs.config) {
+      const config = await loadConfig(scrapeArgs.config);
       console.log(chalk.cyan(`Loaded config with ${config.creators.length} creator(s)`));
       const proxyManager = (config.proxies && config.proxies.length > 0)
         ? new ProxyManager(config.proxies, config.proxyRotation)
@@ -50,10 +64,10 @@ process.on('uncaughtException', (error) => {
 
         const service = creator.service;
         const userId = creator.userId;
-        const host = creator.host || config.host || (argv.host as HostType);
-        const outputDir = creator.outputDir || config.outputDir || argv.outputDir;
-        const maxPosts = creator.maxPosts ?? config.maxPosts ?? argv.maxPosts;
-        const maxConcurrentDownloads = config.maxConcurrentDownloads ?? argv.maxConcurrentDownloads ?? 2;
+        const host = creator.host || config.host || (scrapeArgs.host as HostType);
+        const outputDir = creator.outputDir || config.outputDir || scrapeArgs.outputDir;
+        const maxPosts = creator.maxPosts ?? config.maxPosts ?? scrapeArgs.maxPosts;
+        const maxConcurrentDownloads = config.maxConcurrentDownloads ?? scrapeArgs.maxConcurrentDownloads ?? 2;
 
         console.log(chalk.magenta(`\n${'='.repeat(60)}`));
         console.log(chalk.magenta(`[${creatorNum}/${config.creators.length}] Scraping ${service}/${userId}`));
@@ -77,12 +91,12 @@ process.on('uncaughtException', (error) => {
       console.log(chalk.green(`Finished processing all ${config.creators.length} creator(s)`));
       console.log(chalk.green(`${'='.repeat(60)}\n`));
     } else {
-      const service = argv.service as ServiceType;
-      const userId = argv.userId as string;
-      const host = argv.host as HostType;
-      const outputDir = argv.outputDir;
-      const maxPosts = argv.maxPosts;
-      const maxConcurrentDownloads = argv.maxConcurrentDownloads ?? 2;
+      const service = scrapeArgs.service as ServiceType;
+      const userId = scrapeArgs.userId as string;
+      const host = scrapeArgs.host as HostType;
+      const outputDir = scrapeArgs.outputDir;
+      const maxPosts = scrapeArgs.maxPosts;
+      const maxConcurrentDownloads = scrapeArgs.maxConcurrentDownloads ?? 2;
       const proxyManager = null;
 
       const ctx = createScraperContext(service, userId, host, outputDir, maxPosts, maxConcurrentDownloads, downloadBars, proxyManager);

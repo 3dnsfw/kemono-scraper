@@ -21,6 +21,22 @@ This page lists all available command line options for Kemono Scraper.
 | `--help` | | Show help | - |
 | `--version` | | Show version | - |
 
+## Subcommands
+
+- `scrape` (default): Download content from Kemono/Coomer (all options in the table above).
+- `compress`: Compress media in `downloads-*` folders using JPEG XL and AV1.
+
+## Compression Command Options
+
+| Option | Description | Default | Env Var |
+|--------|-------------|---------|---------|
+| `--jpegXlQuality` | JPEG XL quality (1-100) | `90` | `JPEG_XL_QUALITY` |
+| `--jpegXlEffort` | JPEG XL effort (1-9) | `5` | `JPEG_XL_EFFORT` |
+| `--av1Crf` | AV1 CRF (lower = higher quality) | `30` | `AV1_CRF` |
+| `--av1Preset` | AV1 preset (0-13, lower = slower) | `6` | `AV1_PRESET` |
+| `--keepOriginals` / `--no-keepOriginals` | Keep originals after compression | `true` | `KEEP_ORIGINALS` |
+| `--dryRun` | Show actions without modifying files | `false` | - |
+
 ## Detailed Options
 
 ### `--config` / `-c`
@@ -241,4 +257,5 @@ DEBUG_PROXY=1 ./kemono-scraper -c config.yaml
 ```bash
 ./kemono-scraper --help
 ```
+
 

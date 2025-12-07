@@ -84,61 +84,52 @@ ffmpeg -version
 
 ## Running Compression
 
-### Basic Usage
+### Basic Usage (recommended)
 
-Navigate to your project directory and run:
-
-```bash
-bun run compress
-```
-
-This will compress all eligible files in your download directories.
-
-### On Windows PowerShell
-
-You can also use the PowerShell script:
-
-```powershell
-.\compress.ps1
-```
-
-### On Windows/Linux/Mac (Shell Script)
+Use the built-in CLI subcommand:
 
 ```bash
-./compress.sh
+./kemono-scraper compress
+```
+
+This scans all `downloads-*` folders in the current directory and compresses eligible files.
+
+### From source (development)
+
+If you are running from source instead of a packaged binary:
+
+```bash
+bun run index.ts compress
 ```
 
 ## Configuration
 
-You can customize compression settings using environment variables:
+You can customize compression via **CLI flags** or **environment variables**. CLI flags take precedence over environment variables.
+
+### CLI Flags
+
+```bash
+./kemono-scraper compress \
+  --jpegXlQuality 95 \
+  --jpegXlEffort 7 \
+  --av1Crf 28 \
+  --av1Preset 6 \
+  --no-keepOriginals
+```
 
 ### Environment Variables
 
 ```bash
-JPEG_XL_QUALITY=95 AV1_CRF=28 bun run compress
+JPEG_XL_QUALITY=95 AV1_CRF=28 ./kemono-scraper compress
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JPEG_XL_QUALITY` | 90 | JPEG XL quality (1-100, higher = better quality) |
-| `JPEG_XL_EFFORT` | 7 | Encoding effort (1-9, higher = slower but smaller files) |
+| `JPEG_XL_EFFORT` | 5 | Encoding effort (1-9, higher = slower but smaller files) |
 | `AV1_CRF` | 30 | AV1 quality (lower = better, 18-35 typical range) |
 | `AV1_PRESET` | 6 | SVT-AV1 preset (0-13, lower = slower but better quality) |
 | `KEEP_ORIGINALS` | 1 | Keep original files after compression (1 = keep, 0 = remove) |
-
-### Windows PowerShell Parameters
-
-On Windows PowerShell, you can pass parameters directly:
-
-```powershell
-.\compress.ps1 -JpegXlQuality 95 -Av1Crf 28
-```
-
-To remove original files after compression:
-
-```powershell
-.\compress.ps1 -KeepOriginals $false
-```
 
 ## Understanding Quality Settings
 
@@ -173,7 +164,7 @@ To remove original files after compression:
 For maximum quality (larger files):
 
 ```bash
-JPEG_XL_QUALITY=98 JPEG_XL_EFFORT=9 AV1_CRF=25 AV1_PRESET=4 bun run compress
+JPEG_XL_QUALITY=98 JPEG_XL_EFFORT=9 AV1_CRF=25 AV1_PRESET=4 ./kemono-scraper compress
 ```
 
 ### Maximum Compression
@@ -181,7 +172,7 @@ JPEG_XL_QUALITY=98 JPEG_XL_EFFORT=9 AV1_CRF=25 AV1_PRESET=4 bun run compress
 For smallest file sizes (some quality loss):
 
 ```bash
-JPEG_XL_QUALITY=85 JPEG_XL_EFFORT=9 AV1_CRF=32 AV1_PRESET=8 bun run compress
+JPEG_XL_QUALITY=85 JPEG_XL_EFFORT=9 AV1_CRF=32 AV1_PRESET=8 ./kemono-scraper compress
 ```
 
 ### Balanced (Default)
@@ -189,7 +180,7 @@ JPEG_XL_QUALITY=85 JPEG_XL_EFFORT=9 AV1_CRF=32 AV1_PRESET=8 bun run compress
 The default settings provide a good balance:
 
 ```bash
-bun run compress
+./kemono-scraper compress
 ```
 
 ### Remove Originals After Compression
@@ -197,7 +188,7 @@ bun run compress
 To automatically remove original files after successful compression:
 
 ```bash
-KEEP_ORIGINALS=0 bun run compress
+KEEP_ORIGINALS=0 ./kemono-scraper compress
 ```
 
 ## How It Works

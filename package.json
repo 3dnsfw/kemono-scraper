@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run .",
-    "compress": "bun run compress.mjs",
+    "compress": "bun run index.ts compress",
     "build": "bun run scripts/build.ts",
     "build:linux": "bun run scripts/build.ts linux-x64",
     "build:linux-arm": "bun run scripts/build.ts linux-arm64",
