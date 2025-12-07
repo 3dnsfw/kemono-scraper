@@ -256,7 +256,7 @@ jobs:
         if: steps.release_info.outputs.is_prerelease == 'false' && steps.verify_assets.outputs.assets_verified == 'true'
         run: |
           TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
-          DOCS_FILE="docs/src/content/docs/getting-started/installation.md"
+          DOCS_FILE="docs/src/content/docs/getting-started/installation.mdx"
           
           echo "Updating docs with stable release tag: ${TAG_NAME}"
           
