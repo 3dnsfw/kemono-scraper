@@ -18,6 +18,11 @@ export default defineConfig({
 					label: 'GitHub',
 					href: 'https://github.com/3dnsfw/Kemono-Scraper',
 				},
+                {
+					icon: "heart",
+					label: "Donate",
+					href: "https://coindrop.to/nsfw3d"
+				},
 			],
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
