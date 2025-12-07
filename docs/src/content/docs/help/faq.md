@@ -88,7 +88,7 @@ bun run compress
 
 This converts:
 - JPG/JPEG → JPEG XL (30-50% smaller)
-- MP4 → AV1 (30-50% smaller)
+- MP4/MKV → AV1 (30-50% smaller)
 
 See the [Compression guide](/Kemono-Scraper/usage/compression/) for detailed instructions and requirements.
 

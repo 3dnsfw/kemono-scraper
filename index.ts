@@ -1187,7 +1187,7 @@ async function fileExistsOrCompressed(filePath: string): Promise<boolean> {
   }
   
   // Check for AV1 re-encoded version of videos
-  if (ext === '.mp4') {
+  if (['.mp4', '.mkv'].includes(ext)) {
     if (await fs.pathExists(basePath + '_av1.mp4')) {
       return true;
     }

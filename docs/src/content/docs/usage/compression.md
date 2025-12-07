@@ -12,7 +12,7 @@ After downloading files, you can compress them to save significant disk space. T
 The compression script automatically processes:
 
 - **Images**: JPG/JPEG → JPEG XL (typically 30-50% smaller)
-- **Videos**: MP4 → AV1 (typically 30-50% smaller)
+- **Videos**: MP4/MKV → AV1 (typically 30-50% smaller)
 
 The scraper automatically detects compressed files on subsequent runs, so you won't re-download files that have already been compressed.
 
@@ -124,6 +124,7 @@ JPEG_XL_QUALITY=95 AV1_CRF=28 bun run compress
 | `JPEG_XL_EFFORT` | 7 | Encoding effort (1-9, higher = slower but smaller files) |
 | `AV1_CRF` | 30 | AV1 quality (lower = better, 18-35 typical range) |
 | `AV1_PRESET` | 6 | SVT-AV1 preset (0-13, lower = slower but better quality) |
+| `KEEP_ORIGINALS` | 1 | Keep original files after compression (1 = keep, 0 = remove) |
 
 ### Windows PowerShell Parameters
 
@@ -131,6 +132,12 @@ On Windows PowerShell, you can pass parameters directly:
 
 ```powershell
 .\compress.ps1 -JpegXlQuality 95 -Av1Crf 28
+```
+
+To remove original files after compression:
+
+```powershell
+.\compress.ps1 -KeepOriginals $false
 ```
 
 ## Understanding Quality Settings
@@ -185,16 +192,24 @@ The default settings provide a good balance:
 bun run compress
 ```
 
+### Remove Originals After Compression
+
+To automatically remove original files after successful compression:
+
+```bash
+KEEP_ORIGINALS=0 bun run compress
+```
+
 ## How It Works
 
 1. The script scans your download directories for uncompressed files
 2. Images (JPG/JPEG) are converted to `.jxl` format
-3. Videos (MP4) are converted to `_av1.mp4` format
-4. Original files are preserved alongside compressed versions
+3. Videos (MP4/MKV) are converted to `_av1.mp4` format
+4. By default, original files are preserved alongside compressed versions
 5. On subsequent scraper runs, compressed files are detected and skipped
 
 :::note
-The original files are kept. You can delete them manually after verifying the compressed versions work correctly.
+By default, original files are kept for safety. You can set `KEEP_ORIGINALS=0` (or `-KeepOriginals $false` on PowerShell) to automatically remove originals after successful compression, or delete them manually after verifying the compressed versions work correctly.
 :::
 
 ## Troubleshooting
@@ -235,3 +250,4 @@ which ffmpeg
 
 - Learn about [basic usage](/Kemono-Scraper/usage/basic/) for downloading files
 - See [command line options](/Kemono-Scraper/usage/cli-options/) for more control
+
