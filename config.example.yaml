@@ -21,20 +21,18 @@ proxies:
 creators:
   # Example Patreon creator
   - service: patreon
-    userId: "12345678"
-    # Optional overrides:
-    # host: coomer.st
-    # outputDir: custom-folder
-    # maxPosts: 100
+    userId: "30037948"
 
   # Example Fanbox creator
   - service: fanbox
-    userId: "creator_name"
+    userId: "3316400"
 
   # Example with custom output directory
   - service: fantia
-    userId: "98765432"
-    outputDir: fantia-downloads/%username%
+    userId: "83679"
+    outputDir: fantia/%username%  # Custom output dir
+    # Optional overrides:
+    # maxPosts: 100
 
   # Example from Coomer
   - service: onlyfans

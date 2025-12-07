@@ -123,17 +123,17 @@ proxies:
 # Creators to scrape
 creators:
   - service: patreon
-    userId: "12345678"
+    userId: "30037948"
 
   - service: fanbox
-    userId: "creator_name"
+    userId: "3316400"
 
   - service: onlyfans
-    userId: "username"
+    userId: "belledelphine"
     host: coomer.st  # Override for this creator
 
   - service: fantia
-    userId: "98765432"
+    userId: "83679"
     outputDir: fantia/%username%  # Custom output dir
     maxPosts: 100  # Limit posts for this creator
 ```
