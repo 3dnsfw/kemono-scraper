@@ -15,7 +15,7 @@ Download all media from Kemono and Coomer. Scrapes posts from a given service an
 
 ## Documentation
 
-📖 **[View the full documentation](https://3dnsfw.github.io/kemono-scraper/)**
+📖 **[View the full documentation](https://3dnsfw.github.io/Kemono-Scraper/)**
 
 The documentation covers:
 - Installation (pre-built executables or from source)
