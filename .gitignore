@@ -1,9 +1,0 @@
-downloads*
-node_modules
-dist
-archive
-.idea
-config.yaml
-config.*.yaml
-config.yml
-config.*.yml
