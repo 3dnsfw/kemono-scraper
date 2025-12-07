@@ -27,6 +27,38 @@ export default defineConfig({
 			customCss: ['./src/styles/custom.css'],
 			head: [
 				{
+					tag: 'script',
+					content: `
+						(function() {
+							// Skip if reduced motion is preferred
+							if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+							
+							// Create overlay element
+							const overlay = document.createElement('div');
+							overlay.className = 'theme-transition-overlay';
+							document.documentElement.appendChild(overlay);
+							
+							// Watch for theme changes on <html> data-theme attribute
+							const observer = new MutationObserver((mutations) => {
+								for (const mutation of mutations) {
+									if (mutation.attributeName === 'data-theme') {
+										// Update overlay background to match new theme
+										overlay.style.background = getComputedStyle(document.documentElement).getPropertyValue('--sl-color-bg');
+										// Trigger animation
+										overlay.classList.remove('active');
+										void overlay.offsetWidth; // Force reflow
+										overlay.classList.add('active');
+										// Clean up after animation
+										setTimeout(() => overlay.classList.remove('active'), 400);
+									}
+								}
+							});
+							
+							observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+						})();
+					`,
+				},
+				{
 					tag: 'meta',
 					attrs: {
 						property: 'og:image',
