@@ -2,37 +2,30 @@
 
 :root {
 	/* Accent colors - a nice purple/blue accent */
-	--sl-color-accent-low: #1a1a2e;
 	--sl-color-accent: #6366f1;
 	--sl-color-accent-high: #a5b4fc;
-	
-	/* Text colors for better readability */
-	--sl-color-white: #f8fafc;
-	--sl-color-gray-1: #e2e8f0;
-	--sl-color-gray-2: #cbd5e1;
-	--sl-color-gray-3: #94a3b8;
-	--sl-color-gray-4: #64748b;
-	--sl-color-gray-5: #475569;
-	--sl-color-gray-6: #334155;
-	--sl-color-black: #0f172a;
 }
 
-/* Ensure dark mode is default and feels polished */
+/* Light theme - minimal overrides */
+[data-theme='light'] {
+	--sl-color-accent-low: #e0e7ff;
+}
+
+/* Dark mode customizations */
 [data-theme='dark'] {
 	--sl-color-bg: #0f0f14;
 	--sl-color-bg-nav: #16161d;
 	--sl-color-bg-sidebar: #16161d;
+	--sl-color-accent-low: #1a1a2e;
 }
 
 /* Style code blocks for better visibility */
 pre {
-	border: 1px solid var(--sl-color-gray-5);
 	border-radius: 0.5rem;
 }
 
 /* Make inline code stand out */
 :not(pre) > code {
-	background-color: var(--sl-color-gray-6);
 	padding: 0.15rem 0.35rem;
 	border-radius: 0.25rem;
 	font-size: 0.9em;
@@ -45,12 +38,7 @@ table {
 }
 
 th, td {
-	border: 1px solid var(--sl-color-gray-5);
 	padding: 0.75rem;
-}
-
-th {
-	background-color: var(--sl-color-gray-6);
 }
 
 /* Improve callout/admonition styling */
