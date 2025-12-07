@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://3dnsfw.github.io/Kemono-Scraper/sitemap-index.xml
