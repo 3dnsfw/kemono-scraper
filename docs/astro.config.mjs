@@ -31,24 +31,43 @@ export default defineConfig({
 					content: `
 						document.addEventListener('DOMContentLoaded', () => {
 							if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+							if (!document.startViewTransition) return;
 							
-							const overlay = document.createElement('div');
-							overlay.className = 'theme-transition-overlay';
-							document.body.appendChild(overlay);
+							// Find the theme toggle button (starlight-theme-rapide uses a button)
+							const themeBtn = document.querySelector('[data-theme-toggle], .theme-toggle button, header button[class*="theme"]');
 							
-							const colors = { light: '#fff', dark: '#0f0f14' };
-							
-							new MutationObserver((mutations) => {
-								const newTheme = document.documentElement.dataset.theme;
-								if (!newTheme) return;
+							// Intercept clicks on theme toggle area
+							document.addEventListener('click', (e) => {
+								const btn = e.target.closest('button');
+								if (!btn) return;
 								
-								overlay.style.background = colors[newTheme];
-								overlay.classList.remove('expanding');
-								void overlay.offsetWidth;
-								overlay.classList.add('expanding');
+								// Check if this button is for theme toggling
+								const isThemeBtn = btn.closest('[data-theme-toggle]') || 
+									btn.textContent.toLowerCase().includes('theme') ||
+									btn.getAttribute('aria-label')?.toLowerCase().includes('theme');
+								if (!isThemeBtn) return;
 								
-								setTimeout(() => overlay.classList.remove('expanding'), 400);
-							}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+								e.preventDefault();
+								e.stopImmediatePropagation();
+								
+								// Determine next theme
+								const current = document.documentElement.dataset.theme || 'dark';
+								const next = current === 'dark' ? 'light' : 'dark';
+								
+								const transition = document.startViewTransition(() => {
+									document.documentElement.dataset.theme = next;
+									localStorage.setItem('starlight-theme', next);
+								});
+								
+								transition.ready.then(() => {
+									const x = window.innerWidth;
+									const maxRadius = Math.hypot(x, window.innerHeight);
+									document.documentElement.animate(
+										{ clipPath: ['circle(0px at ' + x + 'px 0)', 'circle(' + maxRadius + 'px at ' + x + 'px 0)'] },
+										{ duration: 800, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', pseudoElement: '::view-transition-new(root)' }
+									);
+								});
+							}, true);
 						});
 					`,
 				},

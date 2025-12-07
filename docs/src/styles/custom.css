@@ -1,29 +1,28 @@
 /* Custom styles for Kemono Scraper docs */
 
-/* ===== Theme Transition Animation ===== */
+/* ===== View Transitions for Theme Toggle ===== */
 
-.theme-transition-overlay {
-	position: fixed;
-	inset: 0;
-	z-index: 99999;
-	pointer-events: none;
-	clip-path: circle(0% at 0 0);
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation: none;
+	mix-blend-mode: normal;
 }
 
-.theme-transition-overlay.expanding {
-	animation: circle-expand 380ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+::view-transition-old(root) {
+	z-index: 1;
 }
 
-@keyframes circle-expand {
-	from { clip-path: circle(0% at 0 0); }
-	to { clip-path: circle(150% at 0 0); }
+::view-transition-new(root) {
+	z-index: 9999;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.theme-transition-overlay.expanding { animation: none; }
+	::view-transition-group(*) {
+		animation: none !important;
+	}
 }
 
-/* ===== End Theme Transition Animation ===== */
+/* ===== End View Transitions ===== */
 
 :root {
 	/* Accent colors - a nice purple/blue accent */
