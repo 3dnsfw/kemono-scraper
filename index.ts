@@ -218,6 +218,7 @@ const PAGE_SIZE = 50;
 const MAX_CONCURRENT_DOWNLOADS = 2;
 const MAX_DOWNLOAD_RETRIES = 3;
 const DOWNLOAD_RETRY_WAIT_SECONDS = 10000;
+const REQUEST_TIMEOUT_MS = 120000; // Abort the HTTP request itself if it never responds
 const MAX_FAILURES_BEFORE_BLACKLIST = 5;
 const STREAM_TIMEOUT_MS = 300000; // 5 minute timeout for stream operations (prevents hangs)
 const BLACKLIST_EXPIRY_MS = 2 * 24 * 60 * 60 * 1000; // 2 days in milliseconds
@@ -677,25 +678,37 @@ async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQue
     proxySelection = proxyResult.selection;
     proxyOptions = proxyResult.options;
 
-    const response = await axios.get(downloadUrl, {
-      responseType: 'stream',
-      timeout: 120000, // Increased timeout to 2 minutes for large files
-      ...proxyOptions,
-      onDownloadProgress: progressEvent => {
-        if (progressEvent.total) {
-          // can calculate percentage
-          safeUpdateTask(ctx, taskId, {
-            percentage: progressEvent.loaded / progressEvent.total,
-            message: chalk.blue(`Downloading`),
-          });
-        } else {
-          safeUpdateTask(ctx, taskId, {
-            percentage: progressEvent.loaded ? 100 : 0,
-            message: chalk.blue(`Downloading`),
-          });
-        }
-      },
-    });
+    // Separate controller to abort requests that never start streaming
+    const requestController = new AbortController();
+    const requestTimeout = setTimeout(() => {
+      requestController.abort();
+    }, REQUEST_TIMEOUT_MS);
+
+    let response;
+    try {
+      response = await axios.get(downloadUrl, {
+        responseType: 'stream',
+        timeout: REQUEST_TIMEOUT_MS, // request-level timeout
+        signal: requestController.signal,
+        ...proxyOptions,
+        onDownloadProgress: progressEvent => {
+          if (progressEvent.total) {
+            // can calculate percentage
+            safeUpdateTask(ctx, taskId, {
+              percentage: progressEvent.loaded / progressEvent.total,
+              message: chalk.blue(`Downloading`),
+            });
+          } else {
+            safeUpdateTask(ctx, taskId, {
+              percentage: progressEvent.loaded ? 100 : 0,
+              message: chalk.blue(`Downloading`),
+            });
+          }
+        },
+      });
+    } finally {
+      clearTimeout(requestTimeout);
+    }
     recordProxyOutcome(ctx, proxySelection);
 
     // Check for 500 errors before processing the stream
@@ -913,12 +926,13 @@ async function downloadFile(ctx: ScraperContext, downloadQueueEntry: DownloadQue
     if (isAxiosError(error)) {
       const status = error.response?.status;
       const errorCode = (error as any).code;
+      const isAbort = errorCode === 'ERR_CANCELED' || (error as any).name === 'CanceledError' || (error as any).name === 'AbortError';
       
       // Handle connection errors (ECONNRESET, ECONNABORTED, ETIMEDOUT)
-      if (errorCode === 'ECONNRESET' || errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT') {
+      if (errorCode === 'ECONNRESET' || errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT' || isAbort) {
         await recordFailure(ctx, filePath, fileName);
         safeUpdateTask(ctx, taskId, {
-          message: `Connection error (${errorCode}). ${retries < MAX_DOWNLOAD_RETRIES ? 'Retrying...' : 'Failed'}`,
+          message: `Connection error (${errorCode || 'aborted'}). ${retries < MAX_DOWNLOAD_RETRIES ? 'Retrying...' : 'Failed'}`,
           barTransformFn: chalk.red,
         });
         
@@ -1050,8 +1064,15 @@ async function downloadFiles(ctx: ScraperContext, downloadQueue: DownloadQueueEn
 }
 
 const MAX_RETRY_PASSES = 3;
+let globalTaskCounter = 0;
 
-async function downloadAllWithRetries(ctx: ScraperContext, downloadQueue: DownloadQueueEntry[]): Promise<void> {
+interface DownloadAllResult {
+  completed: number;
+  failed: number;
+  total: number;
+}
+
+async function downloadAllWithRetries(ctx: ScraperContext, downloadQueue: DownloadQueueEntry[]): Promise<DownloadAllResult> {
   const totalFiles = downloadQueue.length;
   let currentQueue = downloadQueue;
   let completedTotal = 0;
@@ -1064,6 +1085,12 @@ async function downloadAllWithRetries(ctx: ScraperContext, downloadQueue: Downlo
       console.log(chalk.yellow(`\nRetry pass ${passNumber - 1}: Retrying ${currentQueue.length} failed download(s)...`));
       // Wait a bit before retry pass to let the server recover
       await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      // Assign new unique task IDs for retry pass to avoid conflicts with removed tasks
+      currentQueue = currentQueue.map(entry => ({
+        ...entry,
+        taskId: `dl-retry-${passNumber}-${++globalTaskCounter}`,
+      }));
     }
 
     const result = await downloadFiles(ctx, currentQueue, totalFiles, completedTotal);
@@ -1078,13 +1105,16 @@ async function downloadAllWithRetries(ctx: ScraperContext, downloadQueue: Downlo
   }
 
   // After all retries, blacklist any remaining failed items
-  if (currentQueue.length > 0) {
-    console.log(chalk.red(`\n${currentQueue.length} download(s) failed after ${MAX_RETRY_PASSES} passes, adding to blacklist:`));
+  const finalFailed = currentQueue.length;
+  if (finalFailed > 0) {
+    console.log(chalk.red(`\n${finalFailed} download(s) failed after ${MAX_RETRY_PASSES} passes, adding to blacklist:`));
     for (const task of currentQueue) {
       console.log(chalk.red(`  - ${task.fileName}`));
       await addToBlacklist(ctx, task.filePath, task.fileName);
     }
   }
+  
+  return { completed: completedTotal, failed: finalFailed, total: totalFiles };
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -1269,11 +1299,20 @@ async function scrapeCreator(ctx: ScraperContext): Promise<void> {
     barTransformFn: chalk.yellow,
     message: 'Starting downloads...',
   });
-  await downloadAllWithRetries(ctx, downloadQueue);
-  ctx.downloadBars.done(ctx.overallProgressBarId, {
-    message: 'All files downloaded.',
-    barTransformFn: chalk.green,
-  });
+  const downloadResult = await downloadAllWithRetries(ctx, downloadQueue);
+  
+  // Show appropriate completion message based on results
+  if (downloadResult.failed === 0) {
+    ctx.downloadBars.done(ctx.overallProgressBarId, {
+      message: 'All files downloaded.',
+      barTransformFn: chalk.green,
+    });
+  } else {
+    ctx.downloadBars.done(ctx.overallProgressBarId, {
+      message: `${downloadResult.completed}/${downloadResult.total} files downloaded. ${downloadResult.failed} failed (blacklisted).`,
+      barTransformFn: chalk.yellow,
+    });
+  }
   
   // Save blacklist one final time before exiting
   await saveBlacklist(ctx);
