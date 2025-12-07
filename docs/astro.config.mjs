@@ -6,7 +6,7 @@ import starlightThemeRapide from 'starlight-theme-rapide';
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://3dnsfw.github.io',
-	base: '/kemono-scraper',
+	base: '/Kemono-Scraper/',
 	integrations: [
 		starlight({
 			plugins: [starlightThemeRapide()],
