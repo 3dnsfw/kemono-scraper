@@ -5,6 +5,7 @@
 host: kemono.cr          # Options: kemono.cr, coomer.st, kemono.su (legacy), coomer.su (legacy)
 outputDir: downloads-%username%  # %username% is replaced with userId
 maxPosts: 5000           # Maximum posts to fetch (0 = unlimited)
+maxConcurrentDownloads: 4  # Maximum concurrent downloads (1-10, default: 2)
 proxyRotation: round_robin # Proxy selection strategy (currently round_robin)
 # Optional proxy list (leave empty to disable proxying)
 proxies:
