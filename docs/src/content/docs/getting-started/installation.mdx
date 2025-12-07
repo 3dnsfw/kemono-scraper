@@ -1,0 +1,145 @@
+---
+title: Installation
+description: How to download and install Kemono Scraper on your computer
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide will help you get Kemono Scraper installed on your computer. Don't worry, it's easier than it sounds!
+
+## Option 1: Download Pre-built Executable (Recommended)
+
+This is the easiest way to get started. You just download a file and run it.
+
+### Step 1: Find Your System Type
+
+First, figure out which version you need:
+
+| Your Computer | Download This File |
+|---------------|-------------------|
+| Windows (most common) | `kemono-scraper-windows-x64.exe` |
+| Mac with Apple Silicon (M1/M2/M3) | `kemono-scraper-darwin-arm64` |
+| Mac with Intel chip | `kemono-scraper-darwin-x64` |
+| Linux | `kemono-scraper-linux-x64` |
+
+:::tip[Not sure which Mac you have?]
+Click the Apple menu () at the top left of your screen, then click "About This Mac". If it says "Apple M1" or "Apple M2", you have Apple Silicon. Otherwise, you have Intel.
+:::
+
+### Step 2: Download the File
+
+Choose between the **latest stable release** or the **nightly build** (bleeding edge, built from the latest commit):
+
+<Tabs>
+<TabItem label="Stable Release">
+
+| Platform | Architecture | Download |
+|----------|--------------|----------|
+| Windows | x64 | [kemono-scraper-windows-x64.exe](https://github.com/3dnsfw/kemono-scraper/releases/download/__LATEST_TAG__/kemono-scraper-windows-x64.exe) |
+| macOS | Apple Silicon (M1/M2/M3) | [kemono-scraper-darwin-arm64](https://github.com/3dnsfw/kemono-scraper/releases/download/__LATEST_TAG__/kemono-scraper-darwin-arm64) |
+| macOS | Intel | [kemono-scraper-darwin-x64](https://github.com/3dnsfw/kemono-scraper/releases/download/__LATEST_TAG__/kemono-scraper-darwin-x64) |
+| Linux | x64 | [kemono-scraper-linux-x64](https://github.com/3dnsfw/kemono-scraper/releases/download/__LATEST_TAG__/kemono-scraper-linux-x64) |
+| Linux | ARM64 | [kemono-scraper-linux-arm64](https://github.com/3dnsfw/kemono-scraper/releases/download/__LATEST_TAG__/kemono-scraper-linux-arm64) |
+
+</TabItem>
+<TabItem label="Nightly Build">
+
+:::caution[Nightly builds may be unstable]
+Nightly builds contain the latest changes but may have bugs or incomplete features.
+:::
+
+| Platform | Architecture | Download |
+|----------|--------------|----------|
+| Windows | x64 | [kemono-scraper-windows-x64.exe](https://github.com/3dnsfw/kemono-scraper/releases/download/nightly/kemono-scraper-windows-x64.exe) |
+| macOS | Apple Silicon (M1/M2/M3) | [kemono-scraper-darwin-arm64](https://github.com/3dnsfw/kemono-scraper/releases/download/nightly/kemono-scraper-darwin-arm64) |
+| macOS | Intel | [kemono-scraper-darwin-x64](https://github.com/3dnsfw/kemono-scraper/releases/download/nightly/kemono-scraper-darwin-x64) |
+| Linux | x64 | [kemono-scraper-linux-x64](https://github.com/3dnsfw/kemono-scraper/releases/download/nightly/kemono-scraper-linux-x64) |
+| Linux | ARM64 | [kemono-scraper-linux-arm64](https://github.com/3dnsfw/kemono-scraper/releases/download/nightly/kemono-scraper-linux-arm64) |
+
+</TabItem>
+</Tabs>
+
+Or browse all releases on the [Releases page](https://github.com/3dnsfw/kemono-scraper/releases).
+
+### Step 3: Prepare the File
+
+#### On Windows
+The file is ready to use! You might want to move it to its own folder.
+
+#### On Mac or Linux
+You need to make the file "executable" (tell your computer it's a program):
+
+1. Open **Terminal** (search for "Terminal" in Spotlight on Mac)
+2. Type this command and press Enter:
+
+```bash
+chmod +x ~/Downloads/kemono-scraper-darwin-arm64
+```
+
+Replace the file name with the one you downloaded.
+
+:::note
+On Mac, you might see a security warning the first time you run it. Go to System Preferences > Security & Privacy and click "Allow Anyway".
+:::
+
+## Option 2: Run from Source Code
+
+If you're more technical and want to run the latest code:
+
+### Prerequisites
+
+You need [Bun](https://bun.sh) installed on your computer.
+
+**Install Bun:**
+
+<Tabs>
+<TabItem label="Windows">
+
+:::tip[How to open Command Prompt or PowerShell]
+- **Method 1**: Press `Win + R`, type `cmd` or `powershell`, then press Enter
+- **Method 2**: Press `Win + X` and select "Windows PowerShell" or "Terminal"
+- **Method 3**: Press `Win` key, type "Command Prompt" or "PowerShell", then press Enter
+- **Method 4**: Right-click the Start button and select "Windows PowerShell" or "Terminal"
+:::
+
+Open PowerShell (not Command Prompt) and run:
+
+```powershell
+powershell -c "irm bun.sh/install.ps1 | iex"
+```
+
+</TabItem>
+<TabItem label="Mac / Linux">
+
+Open Terminal and run:
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+</TabItem>
+</Tabs>
+
+### Steps
+
+1. **Download the code:**
+```bash
+git clone https://github.com/3dnsfw/kemono-scraper.git
+cd kemono-scraper
+```
+
+2. **Install dependencies:**
+```bash
+bun install
+```
+
+3. **Run the scraper:**
+```bash
+bun start --help
+```
+
+## Next Steps
+
+Now that you have Kemono Scraper installed, head over to the [Quick Start guide](/kemono-scraper/getting-started/quick-start/) to learn how to use it!

@@ -10,6 +10,7 @@ on:
       - 'README.md'
       - '.github/dependabot.yml'
       - '.gitignore'
+      - 'docs/**'
 
 permissions:
   contents: write
@@ -214,6 +215,68 @@ jobs:
             --notes-file release_body.md \
             $PRERELEASE_FLAG \
             release/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release assets exist
+        if: steps.release_info.outputs.is_prerelease == 'false'
+        id: verify_assets
+        run: |
+          TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
+          echo "Verifying assets for release ${TAG_NAME}..."
+          
+          EXPECTED_ASSETS=(
+            "kemono-scraper-linux-x64"
+            "kemono-scraper-linux-arm64"
+            "kemono-scraper-windows-x64.exe"
+            "kemono-scraper-darwin-x64"
+            "kemono-scraper-darwin-arm64"
+          )
+          
+          ACTUAL_ASSETS=$(gh release view "${TAG_NAME}" --json assets --jq '.assets[].name')
+          
+          MISSING=()
+          for asset in "${EXPECTED_ASSETS[@]}"; do
+            if ! echo "${ACTUAL_ASSETS}" | grep -q "^${asset}$"; then
+              MISSING+=("${asset}")
+            fi
+          done
+          
+          if [[ ${#MISSING[@]} -gt 0 ]]; then
+            echo "::warning::Missing assets: ${MISSING[*]}"
+            echo "assets_verified=false" >> $GITHUB_OUTPUT
+          else
+            echo "All expected assets found."
+            echo "assets_verified=true" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update docs with latest stable release tag
+        if: steps.release_info.outputs.is_prerelease == 'false' && steps.verify_assets.outputs.assets_verified == 'true'
+        run: |
+          TAG_NAME="${{ steps.release_info.outputs.tag_name }}"
+          DOCS_FILE="docs/src/content/docs/getting-started/installation.md"
+          
+          echo "Updating docs with stable release tag: ${TAG_NAME}"
+          
+          # Replace __LATEST_TAG__ placeholder with actual tag
+          sed -i "s/__LATEST_TAG__/${TAG_NAME}/g" "${DOCS_FILE}"
+          
+          # Check if any changes were made
+          if git diff --quiet "${DOCS_FILE}"; then
+            echo "No changes to docs (placeholder may already be updated or not present)."
+            exit 0
+          fi
+          
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Commit and push
+          git add "${DOCS_FILE}"
+          git commit -m "docs: update download links to ${TAG_NAME}"
+          git push origin HEAD:master
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
