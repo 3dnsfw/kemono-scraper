@@ -13,9 +13,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to Codeberg
+      - name: Add Codeberg remote
         run: |
-          git remote add codeberg https://$CODEBERG_TOKEN@codeberg.org/3dnsfw/Kemono-Scraper.git
-          git push --mirror codeberg
+          git remote add codeberg https://$CODEBERG_TOKEN@codeberg.org/USERNAME/REPONAME.git
         env:
           CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+
+      - name: Sync branch deletions (prune remote)
+        run: |
+          # Make local copy fully reflect GitHub
+          git fetch origin --prune --prune-tags
+
+      - name: Push all branches (delete removed ones)
+        run: |
+          # Delete branches on Codeberg that no longer exist locally
+          for branch in $(git branch -r | sed 's/origin\///'); do
+            if ! git show-ref --verify --quiet "refs/heads/$branch"; then
+              echo "Deleting branch on Codeberg: $branch"
+              git push codeberg --delete "$branch" || true
+            fi
+          done
+
+          # Push all current branches
+          git push codeberg --all --force
+
+      - name: Push all tags (delete removed ones)
+        run: |
+          # Delete tags that no longer exist locally
+          for tag in $(git ls-remote --tags codeberg | awk '{print $2}' | sed 's#refs/tags/##'); do
+            if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "Deleting tag on Codeberg: $tag"
+              git push codeberg :refs/tags/"$tag" || true
+            fi
+          done
+
+          # Push all current tags
+          git push codeberg --tags --force
