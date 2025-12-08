@@ -15,7 +15,7 @@ jobs:
 
       - name: Push to Codeberg
         run: |
-          git remote add codeberg https://$CODEBERG_TOKEN@codeberg.org/USERNAME/REPONAME.git
+          git remote add codeberg https://$CODEBERG_TOKEN@codeberg.org/3dnsfw/Kemono-Scraper.git
           git push --mirror codeberg
         env:
           CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
