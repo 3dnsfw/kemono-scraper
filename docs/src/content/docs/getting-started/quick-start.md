@@ -16,21 +16,21 @@ Make sure you have:
 
 ## Finding Creator Information
 
-### On Kemono (kemono.su or kemono.cr)
+### On Kemono (kemono.cr)
 
-1. Go to [kemono.su](https://kemono.su) or [kemono.cr](https://kemono.cr)
+1. Go to [kemono.cr](https://kemono.cr)
 2. Search for the creator you want
 3. Look at the URL - it will look like:
-   `https://kemono.su/patreon/user/12345678`
+   `https://kemono.cr/patreon/user/12345678`
    - The service is `patreon`
    - The user ID is `12345678`
 
-### On Coomer (coomer.su or coomer.st)
+### On Coomer (coomer.st)
 
-1. Go to [coomer.su](https://coomer.su) or [coomer.st](https://coomer.st)
+1. Go to [coomer.st](https://coomer.st)
 2. Search for the creator
 3. Look at the URL - it will look like:
-   `https://coomer.su/onlyfans/user/belledelphine`
+   `https://coomer.st/onlyfans/user/belledelphine`
    - The service is `onlyfans`
    - The user ID is `belledelphine`
 
