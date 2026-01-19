@@ -261,14 +261,18 @@ jobs:
           
           echo "Updating docs with stable release tag: ${TAG_NAME}"
           
-          # Replace __LATEST_TAG__ placeholder with actual tag
-          sed -i "s/__LATEST_TAG__/${TAG_NAME}/g" "${DOCS_FILE}"
+          # Replace version tags in download URLs using sed
+          sed -i -E "s|releases/download/v[^/]+/|releases/download/${TAG_NAME}/|g" "${DOCS_FILE}"
           
           # Check if any changes were made
           if git diff --quiet "${DOCS_FILE}"; then
-            echo "No changes to docs (placeholder may already be updated or not present)."
+            echo "No changes to docs (version may already be up to date)."
             exit 0
           fi
+          
+          # Show what changed for debugging
+          echo "Changes made to ${DOCS_FILE}:"
+          git diff "${DOCS_FILE}"
           
           # Configure git
           git config user.name "github-actions[bot]"
@@ -280,4 +284,3 @@ jobs:
           git push origin HEAD:master
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
