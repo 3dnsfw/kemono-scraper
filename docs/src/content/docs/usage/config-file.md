@@ -18,11 +18,13 @@ If you want to download from multiple creators regularly, using a configuration 
 
 ### Step 1: Copy the Example
 
-The scraper comes with an example config file. Copy it:
+The scraper comes with an example config file. Copy it if you installed from source:
 
 ```bash
 cp config.example.yaml config.yaml
 ```
+
+Otherwise you can [download it from here](https://raw.githubusercontent.com/3dnsfw/Kemono-Scraper/refs/heads/master/config.example.yaml) (open the link and press `CTRL` + `S` to save the file)
 
 ### Step 2: Edit the File
 
