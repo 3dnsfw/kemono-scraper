@@ -91,7 +91,7 @@ The creator's ID or username. Required unless using `--config`.
 
 :::tip
 Find the user ID in the URL on Kemono/Coomer. For example:
-`https://kemono.su/patreon/user/12345678` → ID is `12345678`
+`https://kemono.cr/patreon/user/12345678` → ID is `12345678`
 :::
 
 ---
@@ -105,16 +105,14 @@ The base website to scrape from.
 | Host | Use For |
 |------|---------|
 | `kemono.cr` | Patreon, Fanbox, Fantia, etc. (default) |
-| `kemono.su` | Backup Kemono domain |
 | `coomer.st` | OnlyFans, Fansly, Candfans |
-| `coomer.su` | Backup Coomer domain |
 
 ```bash
-# Use Coomer for OnlyFans
+# Use Coomer
 ./kemono-scraper -s onlyfans -u username --host coomer.st
 
-# Use backup Kemono domain
-./kemono-scraper -s patreon -u 12345678 --host kemono.su
+# Use Kemono
+./kemono-scraper -s patreon -u 12345678 --host kemono.cr
 ```
 
 ---
