@@ -68,7 +68,7 @@ Or add an exception in Windows Defender settings.
 
 1. **Try a different host:**
    ```bash
-   ./kemono-scraper -s patreon -u 12345 --host kemono.su
+   ./kemono-scraper -s patreon -u 12345 --host kemono.cr
    ```
 
 2. **Wait and try again** - The site might be temporarily down
@@ -154,7 +154,7 @@ To retry blacklisted files, delete `blacklist.json` from your download folder.
 Make sure you have the correct user ID. Check the URL on Kemono/Coomer:
 
 ```
-https://kemono.su/patreon/user/12345678
+https://kemono.cr/patreon/user/12345678
                               ^^^^^^^^
                               This is the user ID
 ```
