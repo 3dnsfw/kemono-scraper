@@ -62,9 +62,7 @@ You can use any of these service names:
 | Host | What It's For |
 |------|---------------|
 | `kemono.cr` | Default - Patreon, Fanbox, etc. |
-| `kemono.su` | Backup domain for Kemono |
 | `coomer.st` | OnlyFans, Fansly, etc. |
-| `coomer.su` | Backup domain for Coomer |
 
 :::tip[Which host to use?]
 - For OnlyFans, Fansly, or Candfans: use `--host coomer.st`
